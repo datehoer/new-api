@@ -117,6 +117,10 @@ func (a *Adaptor) GetRequestURL(info *relaycommon.RelayInfo) (string, error) {
 	}
 	switch info.ChannelType {
 	case constant.ChannelTypeAzure:
+		if modelPath := azureFlux2ModelPath(info); modelPath != "" {
+			requestURL := "/providers/blackforestlabs/v1/" + modelPath + "?api-version=preview"
+			return relaycommon.GetFullRequestURL(strings.TrimRight(info.ChannelBaseUrl, "/"), requestURL, info.ChannelType), nil
+		}
 		apiVersion := info.ApiVersion
 		if apiVersion == "" {
 			apiVersion = constant.AzureDefaultAPIVersion
@@ -184,6 +188,11 @@ func (a *Adaptor) GetRequestURL(info *relaycommon.RelayInfo) (string, error) {
 func (a *Adaptor) SetupRequestHeader(c *gin.Context, header *http.Header, info *relaycommon.RelayInfo) error {
 	channel.SetupApiRequestHeader(info, c, header)
 	if info.ChannelType == constant.ChannelTypeAzure {
+		if azureFlux2ModelPath(info) != "" {
+			header.Del("api-key")
+			header.Set("Authorization", "Bearer "+info.ApiKey)
+			return nil
+		}
 		header.Set("api-key", info.ApiKey)
 		return nil
 	}
@@ -502,6 +511,9 @@ func (a *Adaptor) ConvertAudioRequest(c *gin.Context, info *relaycommon.RelayInf
 }
 
 func (a *Adaptor) ConvertImageRequest(c *gin.Context, info *relaycommon.RelayInfo, request dto.ImageRequest) (any, error) {
+	if azureFlux2ModelPath(info) != "" {
+		return convertAzureFlux2ImageRequest(info, request)
+	}
 	switch info.RelayMode {
 	case relayconstant.RelayModeImagesEdits:
 		if isJSONRequest(c) {
