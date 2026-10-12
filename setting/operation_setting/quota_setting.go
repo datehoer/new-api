@@ -9,6 +9,7 @@ import (
 )
 
 type QuotaSetting struct {
+	RequireModelPrice         bool    `json:"require_model_price"`
 	EnableFreeModelPreConsume bool    `json:"enable_free_model_pre_consume"` // 是否对免费模型启用预消耗
 	TrustQuotaUSD             float64 `json:"trust_quota_usd"`               // 钱包免预扣门槛，0 表示禁用
 	PreConsumeMultiplier      float64 `json:"pre_consume_multiplier"`        // 预计输入费用的预扣倍率，仅影响预留
@@ -32,6 +33,12 @@ func GetQuotaSetting() *QuotaSetting {
 
 // ValidateQuotaOption validates reservation settings before they are persisted.
 func ValidateQuotaOption(key, value string) error {
+	if key == "quota_setting.require_model_price" {
+		if value != "true" && value != "false" {
+			return fmt.Errorf("%s must be true or false", key)
+		}
+		return nil
+	}
 	if key != "quota_setting.trust_quota_usd" && key != "quota_setting.pre_consume_multiplier" {
 		return nil
 	}

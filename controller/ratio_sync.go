@@ -11,7 +11,6 @@ import (
 	"net/http"
 	"net/url"
 	"sort"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -842,88 +841,16 @@ func isModelsDevAPIEndpoint(rawURL string) bool {
 //
 // completion_ratio = completion_price / prompt_price (output/input multiplier)
 func convertOpenRouterToRatioData(reader io.Reader) (map[string]any, error) {
-	var orResp struct {
-		Data []struct {
-			ID      string `json:"id"`
-			Pricing struct {
-				Prompt         string `json:"prompt"`
-				Completion     string `json:"completion"`
-				InputCacheRead string `json:"input_cache_read"`
-			} `json:"pricing"`
-		} `json:"data"`
+	expressions, err := readOpenRouterExpressions(reader)
+	if err != nil {
+		return nil, err
 	}
-
-	if err := common.DecodeJson(reader, &orResp); err != nil {
-		return nil, fmt.Errorf("failed to decode OpenRouter response: %w", err)
+	modes, prices := map[string]any{}, map[string]any{}
+	for name, expression := range expressions {
+		modes[name] = billing_setting.BillingModeTieredExpr
+		prices[name] = expression
 	}
-
-	modelRatioMap := make(map[string]any)
-	completionRatioMap := make(map[string]any)
-	cacheRatioMap := make(map[string]any)
-
-	for _, m := range orResp.Data {
-		promptPrice, promptErr := strconv.ParseFloat(m.Pricing.Prompt, 64)
-		completionPrice, compErr := strconv.ParseFloat(m.Pricing.Completion, 64)
-
-		if promptErr != nil && compErr != nil {
-			// Both unparseable — skip this model
-			continue
-		}
-
-		// Treat parse errors as 0
-		if promptErr != nil {
-			promptPrice = 0
-		}
-		if compErr != nil {
-			completionPrice = 0
-		}
-
-		// Negative values are sentinel values (e.g., -1 for dynamic/variable pricing) — skip
-		if promptPrice < 0 || completionPrice < 0 {
-			continue
-		}
-
-		if promptPrice == 0 && completionPrice == 0 {
-			// Free model
-			modelRatioMap[m.ID] = 0.0
-			continue
-		}
-		if promptPrice <= 0 {
-			// No meaningful prompt baseline, cannot derive ratios safely.
-			continue
-		}
-
-		// Normal case: promptPrice > 0
-		ratio := promptPrice * 1000 * ratio_setting.USD
-		ratio = roundRatioValue(ratio)
-		modelRatioMap[m.ID] = ratio
-
-		compRatio := completionPrice / promptPrice
-		compRatio = roundRatioValue(compRatio)
-		completionRatioMap[m.ID] = compRatio
-
-		// Convert input_cache_read to cache_ratio (= cache_read_price / prompt_price)
-		if m.Pricing.InputCacheRead != "" {
-			if cachePrice, err := strconv.ParseFloat(m.Pricing.InputCacheRead, 64); err == nil && cachePrice >= 0 {
-				cacheRatio := cachePrice / promptPrice
-				cacheRatio = roundRatioValue(cacheRatio)
-				cacheRatioMap[m.ID] = cacheRatio
-			}
-		}
-	}
-
-	converted := make(map[string]any)
-	if len(modelRatioMap) > 0 {
-		converted["model_ratio"] = modelRatioMap
-	}
-	if len(completionRatioMap) > 0 {
-		converted["completion_ratio"] = completionRatioMap
-	}
-	if len(cacheRatioMap) > 0 {
-		converted["cache_ratio"] = cacheRatioMap
-	}
-
-	return converted, nil
+	return map[string]any{"billing_mode": modes, "billing_expr": prices}, nil
 }
 
 type modelsDevProvider struct {

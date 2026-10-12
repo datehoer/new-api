@@ -18,27 +18,36 @@ import (
 )
 
 const (
-	BillingModeRatio        = "ratio"
-	BillingModeTieredExpr   = "tiered_expr"
-	BillingModeField        = "billing_mode"
-	BillingExprField        = "billing_expr"
-	PluginBillingExprOption = "billing_setting.plugin_billing_expr"
-	maxTaskExprSmokeTests   = 64
+	BillingModeRatio         = "ratio"
+	BillingModeTieredExpr    = "tiered_expr"
+	BillingModeField         = "billing_mode"
+	BillingExprField         = "billing_expr"
+	PluginBillingExprOption  = "billing_setting.plugin_billing_expr"
+	PriceSourceOption        = "billing_setting.price_source"
+	PriceSourceExprOption    = "billing_setting.price_source_expr"
+	PriceSourceUpdatedOption = "billing_setting.price_source_updated_at"
+	maxTaskExprSmokeTests    = 64
 )
 
 // BillingSetting is managed by config.GlobalConfig.Register.
 // DB keys: billing_setting.billing_mode, billing_setting.billing_expr,
 // billing_setting.plugin_billing_expr
 type BillingSetting struct {
-	BillingMode       map[string]string `json:"billing_mode"`
-	BillingExpr       map[string]string `json:"billing_expr"`
-	PluginBillingExpr map[string]string `json:"plugin_billing_expr"`
+	BillingMode          map[string]string `json:"billing_mode"`
+	BillingExpr          map[string]string `json:"billing_expr"`
+	PluginBillingExpr    map[string]string `json:"plugin_billing_expr"`
+	PriceSource          map[string]string `json:"price_source"`
+	PriceSourceExpr      map[string]string `json:"price_source_expr"`
+	PriceSourceUpdatedAt map[string]string `json:"price_source_updated_at"`
 }
 
 var billingSetting = BillingSetting{
-	BillingMode:       make(map[string]string),
-	BillingExpr:       make(map[string]string),
-	PluginBillingExpr: make(map[string]string),
+	BillingMode:          make(map[string]string),
+	BillingExpr:          make(map[string]string),
+	PluginBillingExpr:    make(map[string]string),
+	PriceSource:          make(map[string]string),
+	PriceSourceExpr:      make(map[string]string),
+	PriceSourceUpdatedAt: make(map[string]string),
 }
 
 func init() {
@@ -65,6 +74,11 @@ func GetBillingMode(model string) string {
 		return BillingModeTieredExpr
 	}
 	return BillingModeRatio
+}
+
+// Only explicit bindings follow model-prices; request routing is unaffected.
+func GetPriceSourceCopy() map[string]string {
+	return maps.Clone(billingSetting.PriceSource)
 }
 
 func GetBillingExpr(model string) (string, bool) {

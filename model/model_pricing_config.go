@@ -67,6 +67,7 @@ var modelPricingOptionKeys = []string{
 	"AudioCompletionRatio", "AudioRatio", "CacheRatio", "CompletionRatio",
 	"CreateCacheRatio", "ImageRatio", "ModelPrice", "ModelRatio",
 	"billing_setting.billing_expr", "billing_setting.billing_mode", billing_setting.PluginBillingExprOption,
+	billing_setting.PriceSourceOption, billing_setting.PriceSourceExprOption, billing_setting.PriceSourceUpdatedOption,
 }
 
 var modelPricingMutationMu sync.Mutex
@@ -403,6 +404,16 @@ func validateModelPricing(name string, values, previous PricingValues) error {
 		if !IsModelPricingOption(key) {
 			return fmt.Errorf("unsupported pricing field: %s", key)
 		}
+		if key == billing_setting.PriceSourceOption || key == billing_setting.PriceSourceExprOption || key == billing_setting.PriceSourceUpdatedOption {
+			text, ok := value.(string)
+			if !ok || strings.TrimSpace(text) == "" {
+				return fmt.Errorf("%s must be a non-empty string", key)
+			}
+			if key == billing_setting.PriceSourceOption && (len(text) > 512 || !strings.HasPrefix(text, "model-prices:") || strings.TrimPrefix(text, "model-prices:") == "" || strings.ContainsAny(text, "\r\n\t ")) {
+				return errors.New("price source must be model-prices:<model>")
+			}
+			continue
+		}
 		if key == "billing_setting.billing_mode" {
 			if value != "ratio" && value != "tiered_expr" {
 				return errors.New("invalid billing mode")
@@ -471,6 +482,17 @@ func validateModelPricing(name string, values, previous PricingValues) error {
 	return nil
 }
 
+// Source provenance and expression travel together. Legacy full-map writes
+// share this rule so a manual edit cannot be overwritten by the daily task.
+func detachManualPriceSource(pricing PricingValues) {
+	if _, linked := pricing[billing_setting.PriceSourceOption]; linked && pricing["billing_setting.billing_mode"] == billing_setting.BillingModeTieredExpr && pricing["billing_setting.billing_expr"] == pricing[billing_setting.PriceSourceExprOption] {
+		return
+	}
+	delete(pricing, billing_setting.PriceSourceOption)
+	delete(pricing, billing_setting.PriceSourceExprOption)
+	delete(pricing, billing_setting.PriceSourceUpdatedOption)
+}
+
 func UpdateModelPricing(changes []ModelPricingChange) error {
 	if len(changes) == 0 {
 		return errors.New("select model pricing changes before saving")
@@ -496,6 +518,8 @@ func UpdateModelPricing(changes []ModelPricingChange) error {
 			if change.Reset {
 				pricing = modelPricingValues(defaults, change.ModelName)
 			}
+			pricing = maps.Clone(pricing)
+			detachManualPriceSource(pricing)
 			if err := validateModelPricing(change.ModelName, pricing, previous); err != nil {
 				return err
 			}
@@ -537,9 +561,12 @@ func UpdateModelPricingOptions(updates map[string]string) error {
 			values[key] = entries
 		}
 		for name := range names {
-			if err := validateModelPricing(name, modelPricingValues(values, name), modelPricingValues(previous, name)); err != nil {
+			pricing := modelPricingValues(values, name)
+			detachManualPriceSource(pricing)
+			if err := validateModelPricing(name, pricing, modelPricingValues(previous, name)); err != nil {
 				return err
 			}
+			replaceModelPricing(values, name, pricing)
 		}
 		return nil
 	})

@@ -99,6 +99,9 @@ func ModelPriceHelper(c *gin.Context, info *relaycommon.RelayInfo, promptTokens 
 		var success bool
 		var matchName string
 		modelRatio, success, matchName = ratio_setting.GetModelRatio(billingModelName)
+		if operation_setting.GetQuotaSetting().RequireModelPrice && !ratio_setting.HasConfiguredModelRatio(billingModelName) {
+			return hosttypes.PriceData{}, modelPriceNotConfiguredError(c, matchName, info.UserId)
+		}
 		if !success {
 			acceptUnsetRatio := false
 			if info.UserSetting.AcceptUnsetRatioModel {
@@ -221,6 +224,9 @@ func ModelPriceHelperPerCall(c *gin.Context, info *relaycommon.RelayInfo) (hostt
 			modelPrice = defaultPrice
 			usePrice = true
 		} else {
+			if operation_setting.GetQuotaSetting().RequireModelPrice && !ratio_setting.HasConfiguredModelRatio(info.OriginModelName) {
+				return hosttypes.PriceData{}, modelPriceNotConfiguredError(c, info.OriginModelName, info.UserId)
+			}
 			var ratioSuccess bool
 			var matchName string
 			modelRatio, ratioSuccess, matchName = ratio_setting.GetModelRatio(info.OriginModelName)

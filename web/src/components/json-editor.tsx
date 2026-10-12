@@ -237,6 +237,7 @@ export function JsonEditor({
                   className='grid grid-cols-[1fr_1fr_auto] gap-2'
                 >
                   <Input
+                    aria-label={resolvedKeyLabel}
                     value={row.key}
                     onChange={(e) =>
                       handleRowChange(row.id, 'key', e.target.value)
@@ -245,6 +246,7 @@ export function JsonEditor({
                     disabled={disabled}
                   />
                   <Input
+                    aria-label={resolvedValueLabel}
                     value={row.value}
                     onChange={(e) =>
                       handleRowChange(row.id, 'value', e.target.value)

@@ -58,6 +58,7 @@ const quotaSchema = z.object({
   TopUpLink: z.string(),
   quota_setting: z.object({
     enable_free_model_pre_consume: z.boolean(),
+    require_model_price: z.boolean().optional(),
     trust_quota_usd: z.preprocess(
       (value) => (value === '' ? undefined : value),
       z.coerce
@@ -163,6 +164,31 @@ export function QuotaSettingsSection({
                   </FormDescription>
                   <FormMessage />
                 </FormItem>
+              )}
+            />
+
+            <FormField
+              control={form.control}
+              name='quota_setting.require_model_price'
+              render={({ field }) => (
+                <SettingsSwitchItem>
+                  <SettingsSwitchContent>
+                    <FormLabel>
+                      {t('Require configured model prices')}
+                    </FormLabel>
+                    <FormDescription>
+                      {t(
+                        'Reject unpriced models before sending requests, including in self-use mode.'
+                      )}
+                    </FormDescription>
+                  </SettingsSwitchContent>
+                  <FormControl>
+                    <Switch
+                      checked={field.value ?? false}
+                      onCheckedChange={field.onChange}
+                    />
+                  </FormControl>
+                </SettingsSwitchItem>
               )}
             />
 

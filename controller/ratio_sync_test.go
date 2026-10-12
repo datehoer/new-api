@@ -1,6 +1,10 @@
 package controller
 
 import (
+	"github.com/QuantumNous/new-api/model"
+	"github.com/QuantumNous/new-api/pkg/billingexpr"
+	"os"
+	"strings"
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
@@ -139,4 +143,107 @@ func TestPricingSyncCompleteSourcesAndArrayFormats(t *testing.T) {
 	assert.Equal(t, float64(4), response.Data.Prices["sync-token"].Upstreams["Expressions(1)"]["completion_ratio"])
 	assert.Equal(t, float64(0), response.Data.Prices["sync-token"].Upstreams["Expressions(1)"]["cache_ratio"])
 	assert.Equal(t, float64(0), response.Data.Prices["sync-free"].Upstreams["Legacy(2)"]["model_ratio"])
+}
+
+func TestOpenRouterCompleteExpressions(t *testing.T) {
+	const catalog = `{"data":[{"id":"anthropic/claude-sonnet-5.5","pricing":{"prompt":"0.000002","completion":"0.00001","input_cache_read":"0.0000001","input_cache_write":"0.0000025","input_cache_write_1h":"0.000004","overrides":[{"min_prompt_tokens":100000,"prompt":"0.000004","input_cache_read":"0"}]}}]}`
+	converted, err := convertOpenRouterToRatioData(strings.NewReader(catalog))
+	require.NoError(t, err)
+	expression, ok := valueMap(converted["billing_expr"])["anthropic/claude-sonnet-5.5"].(string)
+	require.True(t, ok)
+	assert.NotContains(t, converted, "model_ratio")
+	assert.NotContains(t, valueMap(converted["billing_expr"]), "claude-sonnet-5-5")
+	for _, tc := range []struct {
+		length float64
+		want   float64
+		tier   string
+	}{{99999, 30.6, "standard"}, {100000, 32.5, "context_100000"}} {
+		cost, trace, err := billingexpr.RunExpr(expression, billingexpr.TokenParams{P: 1, C: 1, CR: 1, CC: 1, CC1h: 4, Len: tc.length})
+		require.NoError(t, err)
+		assert.InDelta(t, tc.want, cost, 0.00000001)
+		assert.Equal(t, tc.tier, trace.MatchedTier)
+	}
+	for _, input := range []string{
+		`{"data":[{"id":"claude","pricing":{"prompt":"0.1","completion":"0.2"}}]}`,
+		`{"data":[{"id":"m","pricing":{"prompt":"NaN","completion":"0"}}]}`,
+		`{"data":[{"id":"m","pricing":{"prompt":"-1","completion":"0"}}]}`,
+		`{"data":[{"id":"m","pricing":{"prompt":"0","completion":"0","overrides":[{"min_prompt_tokens":1},{"min_prompt_tokens":1}]}}]}`,
+	} {
+		_, err := readOpenRouterExpressions(strings.NewReader(input))
+		require.Error(t, err)
+	}
+	zero, err := readOpenRouterExpressions(strings.NewReader(`{"data":[{"id":"m","pricing":{"prompt":"0","completion":"0","input_cache_read":"0"}}]}`))
+	require.NoError(t, err)
+	assert.Equal(t, `tier("standard", p * 0 + c * 0 + cr * 0)`, zero["m"])
+}
+
+func TestModelPriceSourceDatabaseMatrix(t *testing.T) {
+	for _, dialect := range []struct{ kind, env string }{{"sqlite", ""}, {"mysql", "TEST_MYSQL_DSN"}, {"postgres", "TEST_POSTGRES_DSN"}} {
+		t.Run(dialect.kind, func(t *testing.T) {
+			if dialect.env != "" && os.Getenv(dialect.env) == "" {
+				t.Skip("set " + dialect.env)
+			}
+			modelManagementDB(t, dialect.kind, os.Getenv(dialect.env))
+			savedConfig := config.GlobalConfig.ExportAllConfigs()
+			t.Cleanup(func() { require.NoError(t, config.GlobalConfig.LoadFromDB(savedConfig)) })
+			name := "claude-local"
+			expr := `tier("standard", p * 2 + c * 10 + cr * 0.1 + cc * 2.5 + cc1h * 4)`
+			snapshot, err := model.GetModelPricingSnapshot([]string{name})
+			require.NoError(t, err)
+			changes, err := buildModelPriceSourceChanges(snapshot, map[string]string{name: "claude-sonnet-5-5"}, map[string]string{"claude-sonnet-5-5": expr}, false)
+			require.NoError(t, err)
+			require.Len(t, changes, 1)
+			require.NoError(t, model.UpdateModelPricing(changes))
+			snapshot, err = model.GetModelPricingSnapshot([]string{name})
+			require.NoError(t, err)
+			require.Len(t, snapshot.Entries, 1)
+			entry := snapshot.Entries[0]
+			assert.Equal(t, expr, entry.Configured["billing_setting.billing_expr"])
+			assert.Equal(t, "model-prices:claude-sonnet-5-5", entry.Configured[billing_setting.PriceSourceOption])
+			assert.NotEmpty(t, entry.Configured[billing_setting.PriceSourceUpdatedOption])
+			assert.ErrorIs(t, model.UpdateModelPricing(changes), model.ErrModelPricingConflict)
+			changes, err = buildModelPriceSourceChanges(snapshot, map[string]string{name: "claude-sonnet-5-5"}, map[string]string{"claude-sonnet-5-5": expr}, true)
+			require.NoError(t, err)
+			assert.Empty(t, changes)
+			changes, err = buildModelPriceSourceChanges(snapshot, map[string]string{name: "missing"}, map[string]string{}, true)
+			require.Error(t, err)
+			assert.Empty(t, changes)
+			nextExpr := `tier("standard", p * 3 + c * 15 + cr * 0.15 + cc * 3.75 + cc1h * 6)`
+			changes, err = buildModelPriceSourceChanges(snapshot, map[string]string{name: "claude-sonnet-5-5"}, map[string]string{"claude-sonnet-5-5": nextExpr}, true)
+			require.NoError(t, err)
+			require.Len(t, changes, 1)
+			require.NoError(t, model.UpdateModelPricing(changes))
+			snapshot, err = model.GetModelPricingSnapshot([]string{name})
+			require.NoError(t, err)
+			manual := snapshot.Entries[0].Configured
+			manual["billing_setting.billing_expr"] = `tier("manual", p * 1)`
+			require.NoError(t, model.UpdateModelPricing([]model.ModelPricingChange{{ModelName: name, ExpectedVersion: snapshot.Entries[0].Version, Pricing: manual}}))
+			snapshot, err = model.GetModelPricingSnapshot([]string{name})
+			require.NoError(t, err)
+			assert.NotContains(t, snapshot.Entries[0].Configured, billing_setting.PriceSourceOption)
+			assert.Equal(t, `tier("manual", p * 1)`, snapshot.Entries[0].Configured["billing_setting.billing_expr"])
+			// Relink, then detach without changing the saved expression.
+			changes, err = buildModelPriceSourceChanges(snapshot, map[string]string{name: "claude-sonnet-5-5"}, map[string]string{"claude-sonnet-5-5": expr}, false)
+			require.NoError(t, err)
+			require.NoError(t, model.UpdateModelPricing(changes))
+			snapshot, err = model.GetModelPricingSnapshot([]string{name})
+			require.NoError(t, err)
+			changes, err = buildModelPriceSourceChanges(snapshot, map[string]string{}, nil, false)
+			require.NoError(t, err)
+			require.NoError(t, model.UpdateModelPricing(changes))
+			snapshot, err = model.GetModelPricingSnapshot([]string{name})
+			require.NoError(t, err)
+			assert.NotContains(t, snapshot.Entries[0].Configured, billing_setting.PriceSourceOption)
+			assert.Equal(t, expr, snapshot.Entries[0].Configured["billing_setting.billing_expr"])
+			changes, err = buildModelPriceSourceChanges(snapshot, map[string]string{name: "claude-sonnet-5-5"}, map[string]string{"claude-sonnet-5-5": expr}, false)
+			require.NoError(t, err)
+			require.NoError(t, model.UpdateModelPricing(changes))
+			raw, err := common.Marshal(map[string]string{name: `tier("legacy-manual", p * 4)`})
+			require.NoError(t, err)
+			require.NoError(t, model.UpdateModelPricingOptions(map[string]string{"billing_setting.billing_expr": string(raw)}))
+			snapshot, err = model.GetModelPricingSnapshot([]string{name})
+			require.NoError(t, err)
+			assert.NotContains(t, snapshot.Entries[0].Configured, billing_setting.PriceSourceOption)
+		})
+	}
 }

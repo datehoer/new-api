@@ -2797,7 +2797,7 @@
     "footer.columns.related.links.oneApi": "One API",
     "footer.columns.related.title": "相关项目",
     "footer.defaultCopyright": "版权所有。",
-    "footer.new\u0061pi.projectAttributionSuffix": "版权所有，由项目贡献者设计与开发。",
+    "footer.newapi.projectAttributionSuffix": "版权所有，由项目贡献者设计与开发。",
     "For advanced custom channels this applies only to /v1/responses routes without protocol conversion.": "高级自定义渠道仅对 /v1/responses 且不做协议转换的路由生效。",
     "GitHub ID is empty!": "GitHub ID 为空！",
     "For channels added after May 10, 2025, no need to remove \".\" from model names during deployment": "对于 2025 年 5 月 10 日之后添加的渠道，在部署时无需从模型名称中移除 \".\"",
@@ -7253,5 +7253,15 @@
     "Zhipu GLM": "智谱GLM",
     "Zhipu V4": "智谱 V4",
     "Zoom": "缩放"
-  }
+  },
+  "Maintained price sources": "自维护价格源",
+  "Linked models follow model-prices daily. Manual price edits stop automatic updates. Removing a link keeps the saved price.": "关联模型每天跟随 model-prices 更新。手动改价后停止自动更新；删除关联会保留已保存的价格。",
+  "Enter exact local model and catalog model IDs.": "请输入准确的本地模型名和价格目录模型名。",
+  "Local model ID": "本地模型名",
+  "Catalog model ID": "价格目录模型名",
+  "Manual pricing": "手动定价",
+  "Keep saved price; stop automatic updates": "保留当前价格，停止自动更新",
+  "Require configured model prices": "必须配置模型价格",
+  "Reject unpriced models before sending requests, including in self-use mode.": "未配置价格的模型在发送上游前报错，自用模式也不例外。",
+  "Model price synchronization": "模型价格同步"
 }

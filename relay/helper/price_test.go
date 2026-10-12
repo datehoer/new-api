@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/i18n"
 	"github.com/QuantumNous/new-api/pkg/billingexpr"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relaykit/dto"
@@ -745,3 +746,33 @@ func (s *priceTestReservation) Refund(*gin.Context)      {}
 func (s *priceTestReservation) NeedsRefund() bool        { return false }
 func (s *priceTestReservation) GetPreConsumedQuota() int { return s.held }
 func (s *priceTestReservation) Reserve(quota int) error  { s.held = max(s.held, quota); return nil }
+
+func TestRequireModelPriceRejectsFallbackEvenInSelfUseMode(t *testing.T) {
+	require.NoError(t, i18n.Init())
+	oldRatio := ratio_setting.ModelRatio2JSONString()
+	oldPrices := ratio_setting.ModelPrice2JSONString()
+	oldSelf := operation_setting.SelfUseModeEnabled
+	oldStrict := operation_setting.GetQuotaSetting().RequireModelPrice
+	t.Cleanup(func() {
+		require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(oldRatio))
+		require.NoError(t, ratio_setting.UpdateModelPriceByJSONString(oldPrices))
+		operation_setting.SelfUseModeEnabled = oldSelf
+		operation_setting.GetQuotaSetting().RequireModelPrice = oldStrict
+	})
+	operation_setting.SelfUseModeEnabled = true
+	operation_setting.GetQuotaSetting().RequireModelPrice = true
+	require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(`{"strict-configured":1,"strict-free":0}`))
+	require.NoError(t, ratio_setting.UpdateModelPriceByJSONString(`{"strict-fixed":0.01}`))
+	for _, name := range []string{"strict-missing", "strict-configured", "strict-free", "strict-fixed"} {
+		ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+		ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+		info := &relaycommon.RelayInfo{OriginModelName: name, UserGroup: "default", UsingGroup: "default", UserId: 0}
+		info.UserSetting.AcceptUnsetRatioModel = true
+		_, err := ModelPriceHelper(ctx, info, 100, &types.TokenCountMeta{})
+		if name == "strict-missing" {
+			require.Error(t, err)
+		} else {
+			require.NoError(t, err)
+		}
+	}
+}

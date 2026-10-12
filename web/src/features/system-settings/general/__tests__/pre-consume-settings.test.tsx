@@ -145,3 +145,21 @@ test.each(['', '-1'])(
     expect(api.put).not.toHaveBeenCalled()
   }
 )
+
+test('saves the strict price guard when enabled', async () => {
+  const put = vi
+    .spyOn(api, 'put')
+    .mockResolvedValue({ data: { success: true } })
+  await renderSettings()
+  const user = userEvent.setup()
+  await user.click(
+    screen.getByRole('switch', { name: 'Require configured model prices' })
+  )
+  await user.click(screen.getByRole('button', { name: 'Save Changes' }))
+  await waitFor(() =>
+    expect(put).toHaveBeenCalledWith('/api/option/', {
+      key: 'quota_setting.require_model_price',
+      value: true,
+    })
+  )
+})

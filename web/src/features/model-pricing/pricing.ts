@@ -50,6 +50,9 @@ export type PricingValues = Partial<
   >
 > & {
   'billing_setting.plugin_billing_expr'?: Record<string, string>
+  'billing_setting.price_source'?: string
+  'billing_setting.price_source_expr'?: string
+  'billing_setting.price_source_updated_at'?: string
 }
 export type PricingOptions = Record<PricingKey, string>
 

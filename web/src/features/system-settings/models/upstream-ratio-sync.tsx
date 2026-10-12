@@ -60,6 +60,7 @@ import {
   OPENROUTER_CHANNEL_TYPE,
   OPENROUTER_ENDPOINT,
 } from './constants'
+import { ModelPriceSources } from './model-price-sources'
 import {
   describeSyncPrice,
   getUpstreamDisplayName,
@@ -300,14 +301,17 @@ export function UpstreamRatioSync() {
         ) : (
           <UpstreamRatioSyncTable
             toolbar={
-              <Button
-                variant='outline'
-                onClick={() => setChannelDialogOpen(true)}
-                disabled={isLoading}
-              >
-                <RefreshCcw className='size-4' aria-hidden />
-                {t('Select price sources')}
-              </Button>
+              <>
+                <ModelPriceSources />
+                <Button
+                  variant='outline'
+                  onClick={() => setChannelDialogOpen(true)}
+                  disabled={isLoading}
+                >
+                  <RefreshCcw className='size-4' aria-hidden />
+                  {t('Select price sources')}
+                </Button>
+              </>
             }
             prices={prices}
             differences={differences}
