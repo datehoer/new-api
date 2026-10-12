@@ -1,7 +1,6 @@
 package model_setting
 
 import (
-	"fmt"
 	"regexp"
 	"slices"
 	"strings"
@@ -119,15 +118,15 @@ func compiledThinkingBlacklist() ([]string, []*regexp.Regexp) {
 		if entry == "" {
 			continue
 		}
-		if strings.HasPrefix(entry, thinkingBlacklistRegexPrefix) {
-			pattern := strings.TrimPrefix(entry, thinkingBlacklistRegexPrefix)
+		if after, ok := strings.CutPrefix(entry, thinkingBlacklistRegexPrefix); ok {
+			pattern := after
 			if pattern == "" {
-				common.SysError(fmt.Sprintf("invalid thinking_model_blacklist regex %q: pattern is empty", entry))
+				common.SysError(common.LogText("invalid thinking_model_blacklist regex %q: pattern is empty", entry))
 				continue
 			}
 			re, err := regexp.Compile(pattern)
 			if err != nil {
-				common.SysError(fmt.Sprintf("invalid thinking_model_blacklist regex %q: %v", entry, err))
+				common.SysError(common.LogText("invalid thinking_model_blacklist regex %q: %v", entry, err))
 				continue
 			}
 			regexes = append(regexes, re)
@@ -150,10 +149,8 @@ func ShouldPreserveThinkingSuffix(modelName string) bool {
 	}
 
 	exact, regexes := compiledThinkingBlacklist()
-	for _, entry := range exact {
-		if entry == target {
-			return true
-		}
+	if slices.Contains(exact, target) {
+		return true
 	}
 	for _, re := range regexes {
 		if re.MatchString(target) {

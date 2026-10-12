@@ -34,7 +34,7 @@ var channelId2Models map[int][]string
 
 func init() {
 	// https://platform.openai.com/docs/models/model-endpoint-compatibility
-	for i := 0; i < constant.APITypeDummy; i++ {
+	for i := range constant.APITypeDummy {
 		if i == constant.APITypeAIProxyLibrary {
 			continue
 		}
@@ -141,7 +141,7 @@ func channelOwnerName(channelType int) string {
 func getPreferredModelOwners(modelNames []string, groups []string) map[string]string {
 	channelTypes, err := model.GetPreferredModelOwnerChannelTypes(modelNames, groups)
 	if err != nil {
-		common.SysLog(fmt.Sprintf("GetPreferredModelOwnerChannelTypes error: %v", err))
+		common.SysLog(common.LogText("GetPreferredModelOwnerChannelTypes error: %v", err))
 		return map[string]string{}
 	}
 
