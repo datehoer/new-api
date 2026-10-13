@@ -1,8 +1,11 @@
 package service
 
 import (
+	"bytes"
+	"encoding/binary"
 	"math"
 	"math/rand"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -11,7 +14,9 @@ import (
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/pkg/billingexpr"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	relayconstant "github.com/QuantumNous/new-api/relay/constant"
 	"github.com/QuantumNous/new-api/relaykit/dto"
+	relaytypes "github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/QuantumNous/new-api/types"
 	"github.com/gin-gonic/gin"
 	"github.com/shopspring/decimal"
@@ -1147,4 +1152,59 @@ func TestRealtimeBillingNormalizesAudioAndCache(t *testing.T) {
 	ok, quota, _ := TryTieredSettle(info, params)
 	require.True(t, ok)
 	assert.Equal(t, 7805, quota)
+}
+
+func TestMeasuredSettlementUsesReportedDurationAndFrozenCharacters(t *testing.T) {
+	expression := `tier("audio", usd(audio_seconds / 60 * 0.0045))`
+	seconds := 70.25
+	info := &relaycommon.RelayInfo{BillingAudioSeconds: &seconds, PriceData: types.PriceData{GroupRatioInfo: types.GroupRatioInfo{GroupRatio: 2}}, TieredBillingSnapshot: &billingexpr.BillingSnapshot{BillingMode: "tiered_expr", ExprString: expression, ExprHash: billingexpr.ExprHashString(expression), QuotaPerUnit: 500000, GroupRatio: 2, EstimatedQuotaAfterGroup: 4500, EstimatedQuotaBeforeGroup: 2250}}
+	ok, quota, result := TryTieredSettle(info, billingexpr.TokenParams{P: 500, C: 100})
+	require.True(t, ok)
+	assert.Equal(t, 5269, quota)
+	require.NotNil(t, result)
+	assert.Equal(t, seconds, result.BillingTokens.AudioSeconds)
+	expression = `tier("characters", text_chars * 40)`
+	info.BillingTextChars = 3
+	info.TieredBillingSnapshot.ExprString = expression
+	info.TieredBillingSnapshot.ExprHash = billingexpr.ExprHashString(expression)
+	_, quota, result = TryTieredSettle(info, billingexpr.TokenParams{P: 500, C: 100})
+	assert.Equal(t, 120, quota)
+	assert.Equal(t, 3.0, result.BillingTokens.TextChars)
+}
+
+func TestUploadedAudioDurationRetainsFractionalSeconds(t *testing.T) {
+	// A valid 16kHz mono PCM WAV with 2,000 samples is exactly 0.125 seconds.
+	var wav bytes.Buffer
+	wav.WriteString("RIFF")
+	require.NoError(t, binary.Write(&wav, binary.LittleEndian, uint32(36+4000)))
+	wav.WriteString("WAVEfmt ")
+	require.NoError(t, binary.Write(&wav, binary.LittleEndian, uint32(16)))
+	for _, v := range []uint16{1, 1} {
+		require.NoError(t, binary.Write(&wav, binary.LittleEndian, v))
+	}
+	for _, v := range []uint32{16000, 32000} {
+		require.NoError(t, binary.Write(&wav, binary.LittleEndian, v))
+	}
+	for _, v := range []uint16{2, 16} {
+		require.NoError(t, binary.Write(&wav, binary.LittleEndian, v))
+	}
+	wav.WriteString("data")
+	require.NoError(t, binary.Write(&wav, binary.LittleEndian, uint32(4000)))
+	wav.Write(make([]byte, 4000))
+	var body bytes.Buffer
+	w := multipart.NewWriter(&body)
+	f, err := w.CreateFormFile("file", "audio.wav")
+	require.NoError(t, err)
+	_, err = f.Write(wav.Bytes())
+	require.NoError(t, err)
+	require.NoError(t, w.Close())
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest("POST", "/v1/audio/transcriptions", &body)
+	c.Request.Header.Set("Content-Type", w.FormDataContentType())
+	info := &relaycommon.RelayInfo{RelayMode: relayconstant.RelayModeAudioTranscription}
+	tokens, err := CountRequestToken(c, &relaytypes.TokenCountMeta{}, info)
+	require.NoError(t, err)
+	require.NotNil(t, info.BillingAudioSeconds)
+	assert.InDelta(t, 0.125, *info.BillingAudioSeconds, 1e-9)
+	assert.Greater(t, tokens, 0)
 }

@@ -350,6 +350,7 @@ func InjectTieredBillingInfo(other *model.LogOther, relayInfo *relaycommon.Relay
 				"cr": tokens.CR, "cc": tokens.CC, "cc1h": tokens.CC1h,
 				"img": tokens.Img, "img_cr": tokens.ImgCR, "img_o": tokens.ImgO, "ai_cr": tokens.AICR,
 				"ai": tokens.AI, "ao": tokens.AO,
+				"audio_seconds": tokens.AudioSeconds, "text_chars": tokens.TextChars,
 			})
 		}
 		if result.ImageCount != nil {

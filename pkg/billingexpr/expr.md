@@ -559,3 +559,19 @@ This enables future evolution without breaking existing expressions.
 | Frontend display | `web/src/helpers/render.jsx`, `web/src/helpers/utils.jsx` |
 | Model detail | `web/src/components/table/model-pricing/modal/components/DynamicPricingBreakdown.jsx` |
 | Log display | `web/src/hooks/usage-logs/useUsageLogsData.jsx`, `web/src/components/table/usage-logs/UsageLogsColumnDefs.jsx` |
+
+### Measured file audio and speech
+
+`audio_seconds` is the measured duration of one uploaded transcription/translation
+file (maximum 24 hours), without rounding to synthetic tokens. `text_chars` is
+the Unicode code point count of a speech request input. `usd(amount)` converts a
+physical-unit dollar charge to the expression engine currency scale. For example,
+`tier("audio", usd(max(audio_seconds, 10) / 3600 * 0.04))` charges $0.04/hour
+with a 10-second minimum; `tier("speech", text_chars * 22)` charges $22/M chars.
+
+Price resolution rejects incompatible endpoints and missing/invalid duration
+before upstream submission. Reservation and settlement use the same quantities;
+valid upstream `usage.type=duration/seconds` or Mistral `prompt_audio_seconds`
+can replace file duration. Missing/invalid measurements retain the upload duration.
+Logs retain the actual seconds/characters in `billing_tokens`. The token counters
+remain available for old contracts; they do not determine measured charges.

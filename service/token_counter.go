@@ -71,7 +71,7 @@ func CountRequestToken(c *gin.Context, meta *types.TokenCountMeta, info *relayco
 		}
 		fileHeaders := multiForm.File["file"]
 		totalAudioToken := 0
-		for _, fileHeader := range fileHeaders {
+		for i, fileHeader := range fileHeaders {
 			file, err := fileHeader.Open()
 			if err != nil {
 				return 0, fmt.Errorf("error opening audio file: %v", err)
@@ -82,6 +82,9 @@ func CountRequestToken(c *gin.Context, meta *types.TokenCountMeta, info *relayco
 			duration, err := common.GetAudioDuration(c.Request.Context(), file, ext)
 			if err != nil {
 				return 0, fmt.Errorf("error getting audio duration: %v", err)
+			}
+			if i == 0 && len(fileHeaders) == 1 {
+				info.BillingAudioSeconds = &duration
 			}
 			// duration 来自用户上传文件的元数据，可被伪造成天文数字或负数。
 			// 负值会让 token 估算变成负数（低估预扣费），先钳到 0 再转换。

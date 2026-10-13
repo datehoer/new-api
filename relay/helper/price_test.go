@@ -10,6 +10,7 @@ import (
 	"github.com/QuantumNous/new-api/i18n"
 	"github.com/QuantumNous/new-api/pkg/billingexpr"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	relayconstant "github.com/QuantumNous/new-api/relay/constant"
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/QuantumNous/new-api/service"
@@ -773,6 +774,39 @@ func TestRequireModelPriceRejectsFallbackEvenInSelfUseMode(t *testing.T) {
 			require.Error(t, err)
 		} else {
 			require.NoError(t, err)
+		}
+	}
+}
+
+func TestMeasuredPriceReservationRequiresMatchingEndpointAndUsage(t *testing.T) {
+	saved := config.GlobalConfig.ExportAllConfigs()
+	t.Cleanup(func() { require.NoError(t, config.GlobalConfig.LoadFromDB(saved)) })
+	require.NoError(t, config.GlobalConfig.LoadFromDB(map[string]string{"billing_setting.billing_mode": `{"measured-asr":"tiered_expr","measured-tts":"tiered_expr"}`, "billing_setting.billing_expr": `{"measured-asr":"tier(\"audio\", usd(audio_seconds / 60 * 0.0045))","measured-tts":"tier(\"characters\", text_chars * 40)"}`}))
+	for _, tc := range []struct {
+		name    string
+		mode    int
+		seconds *float64
+		input   string
+		valid   bool
+	}{
+		{"measured-asr", relayconstant.RelayModeAudioTranscription, common.GetPointer(70.25), "", true},
+		{"measured-asr", relayconstant.RelayModeChatCompletions, common.GetPointer(70.25), "", false},
+		{"measured-asr", relayconstant.RelayModeAudioTranscription, nil, "", false},
+		{"measured-asr", relayconstant.RelayModeAudioTranscription, common.GetPointer(-1.0), "", false},
+		{"measured-tts", relayconstant.RelayModeAudioSpeech, nil, "你好😊", true},
+		{"measured-tts", relayconstant.RelayModeAudioSpeech, nil, "", false},
+	} {
+		c, _ := gin.CreateTestContext(httptest.NewRecorder())
+		c.Request = httptest.NewRequest("POST", "/v1/audio", nil)
+		info := &relaycommon.RelayInfo{OriginModelName: tc.name, RelayMode: tc.mode, BillingAudioSeconds: tc.seconds, Request: &dto.AudioRequest{Model: tc.name, Input: tc.input}, UserGroup: "default", UsingGroup: "default", RelayFormat: types.RelayFormatOpenAI}
+		_, err := ModelPriceHelper(c, info, 100, &types.TokenCountMeta{})
+		if tc.valid {
+			require.NoError(t, err)
+			if tc.name == "measured-tts" {
+				assert.Equal(t, 3.0, info.BillingTextChars)
+			}
+		} else {
+			require.Error(t, err)
 		}
 	}
 }

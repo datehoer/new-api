@@ -244,6 +244,10 @@ func TryTieredSettle(relayInfo *relaycommon.RelayInfo, params billingexpr.TokenP
 	}
 
 	requestInput := billingexpr.RequestInput{}
+	if relayInfo.BillingAudioSeconds != nil {
+		params.AudioSeconds = *relayInfo.BillingAudioSeconds
+	}
+	params.TextChars = relayInfo.BillingTextChars
 	if relayInfo.BillingRequestInput != nil {
 		requestInput = *relayInfo.BillingRequestInput
 	}

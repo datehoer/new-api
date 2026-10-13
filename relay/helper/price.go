@@ -3,7 +3,9 @@ package helper
 import (
 	"errors"
 	"fmt"
+	"math"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/i18n"
@@ -11,6 +13,7 @@ import (
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/pkg/billingexpr"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	relayconstant "github.com/QuantumNous/new-api/relay/constant"
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/relaykit/relayconvert/reasoning"
 	"github.com/QuantumNous/new-api/relaykit/types"
@@ -366,11 +369,31 @@ func modelPriceHelperTiered(c *gin.Context, info *relaycommon.RelayInfo, billing
 		}
 	}
 
-	rawCost, trace, err := billingexpr.RunExprByHashWithRequest(exprStr, exprHash, billingexpr.TokenParams{
+	params := billingexpr.TokenParams{
 		P:   float64(promptTokens),
 		C:   0,
 		Len: float64(promptTokens),
-	}, requestInput)
+	}
+	used := billingexpr.UsedVarsByHash(exprStr, exprHash)
+	if used["audio_seconds"] {
+		if info.RelayMode != relayconstant.RelayModeAudioTranscription && info.RelayMode != relayconstant.RelayModeAudioTranslation {
+			return hosttypes.PriceData{}, errors.New("audio duration pricing requires a file transcription or translation request")
+		}
+		seconds := info.BillingAudioSeconds
+		if seconds == nil || math.IsNaN(*seconds) || math.IsInf(*seconds, 0) || *seconds <= 0 || *seconds > billingexpr.MaxAudioBillingSeconds {
+			return hosttypes.PriceData{}, errors.New("audio duration pricing requires one valid audio file of at most 24 hours")
+		}
+		params.AudioSeconds = *seconds
+	}
+	if used["text_chars"] {
+		audio, ok := info.Request.(*dto.AudioRequest)
+		if !ok || info.RelayMode != relayconstant.RelayModeAudioSpeech || audio.Input == "" {
+			return hosttypes.PriceData{}, errors.New("character pricing requires a non-empty speech input")
+		}
+		info.BillingTextChars = float64(utf8.RuneCountInString(audio.Input))
+		params.TextChars = info.BillingTextChars
+	}
+	rawCost, trace, err := billingexpr.RunExprByHashWithRequest(exprStr, exprHash, params, requestInput)
 	if err != nil {
 		return hosttypes.PriceData{}, fmt.Errorf("model %s tiered expr run failed: %w", billingModelName, err)
 	}

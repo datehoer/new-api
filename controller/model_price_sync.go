@@ -322,9 +322,15 @@ func readModelPriceCatalog(reader io.Reader) (map[string]string, error) {
 				if len(billingexpr.UsedUsageKeys(expression)) == 0 || billingexpr.UsesFixedPricing(expression) {
 					return nil, errors.New("invalid task usage contract")
 				}
-			} else if metadata.Unit == "token" || metadata.Unit == "request" {
+			} else if metadata.Unit == "token" || metadata.Unit == "request" || metadata.Unit == "measured" {
 				if len(billingexpr.UsedUsageKeys(expression)) != 0 || (metadata.Unit == "request") != billingexpr.UsesFixedPricing(expression) {
 					return nil, errors.New("manual pricing unit does not match expression")
+				}
+				if metadata.Unit == "measured" {
+					used := billingexpr.UsedVars(expression)
+					if !used["audio_seconds"] && !used["text_chars"] {
+						return nil, errors.New("measured pricing requires duration or character usage")
+					}
 				}
 				if err := billing_setting.SmokeTestExpr(expression); err != nil {
 					return nil, err

@@ -56,6 +56,12 @@ func runProgram(prog *vm.Program, requestRules []RequestRuleTrace, usedVars map[
 		RequestRules: append([]RequestRuleTrace(nil), requestRules...),
 	}
 	headers := normalizeHeaders(request.Headers)
+	if usedVars["audio_seconds"] && (math.IsNaN(params.AudioSeconds) || math.IsInf(params.AudioSeconds, 0) || params.AudioSeconds < 0 || params.AudioSeconds > MaxAudioBillingSeconds) {
+		return 0, trace, fmt.Errorf("audio_seconds is outside the supported range")
+	}
+	if usedVars["text_chars"] && (math.IsNaN(params.TextChars) || math.IsInf(params.TextChars, 0) || params.TextChars < 0 || params.TextChars > math.MaxInt32) {
+		return 0, trace, fmt.Errorf("text_chars is outside the supported range")
+	}
 	imageCount := 1
 	if usedVars["image_count"] {
 		if request.ImageCount != nil {
@@ -68,19 +74,22 @@ func runProgram(prog *vm.Program, requestRules []RequestRuleTrace, usedVars map[
 	}
 
 	env := map[string]any{
-		"image_count": float64(imageCount),
-		"p":           params.P,
-		"c":           params.C,
-		"len":         params.Len,
-		"cr":          params.CR,
-		"cc":          params.CC,
-		"cc1h":        params.CC1h,
-		"img":         params.Img,
-		"img_cr":      params.ImgCR,
-		"img_o":       params.ImgO,
-		"ai":          params.AI,
-		"ai_cr":       params.AICR,
-		"ao":          params.AO,
+		"image_count":   float64(imageCount),
+		"p":             params.P,
+		"c":             params.C,
+		"len":           params.Len,
+		"cr":            params.CR,
+		"cc":            params.CC,
+		"cc1h":          params.CC1h,
+		"img":           params.Img,
+		"img_cr":        params.ImgCR,
+		"img_o":         params.ImgO,
+		"ai":            params.AI,
+		"ai_cr":         params.AICR,
+		"ao":            params.AO,
+		"audio_seconds": params.AudioSeconds,
+		"text_chars":    params.TextChars,
+		"usd":           func(amount float64) float64 { return amount * 1_000_000 },
 		"tier": func(name string, value float64) float64 {
 			trace.MatchedTier = name
 			trace.Cost = value

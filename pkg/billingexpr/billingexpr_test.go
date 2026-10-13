@@ -1196,3 +1196,27 @@ func TestFrontendSimulationContract(t *testing.T) {
 		})
 	}
 }
+
+func TestMeasuredAudioAndCharacterBilling(t *testing.T) {
+	for _, tc := range []struct {
+		name, expression string
+		params           billingexpr.TokenParams
+		quota            int
+	}{
+		{"fractional audio seconds", `tier("minute", usd(audio_seconds / 60 * 0.0045))`, billingexpr.TokenParams{AudioSeconds: 70.25}, 2634},
+		{"minimum duration", `tier("hour", usd(max(audio_seconds, 10) / 3600 * 0.04))`, billingexpr.TokenParams{AudioSeconds: 0.125}, 56},
+		{"characters", `tier("chars", text_chars * 40)`, billingexpr.TokenParams{TextChars: 3}, 60},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			snap := &billingexpr.BillingSnapshot{ExprString: tc.expression, ExprHash: billingexpr.ExprHashString(tc.expression), GroupRatio: 1, QuotaPerUnit: 500000}
+			res, err := billingexpr.ComputeTieredQuota(snap, tc.params)
+			require.NoError(t, err)
+			assert.Equal(t, tc.quota, res.ActualQuotaAfterGroup)
+			require.NotNil(t, res.BillingTokens)
+		})
+	}
+	for _, seconds := range []float64{-1, math.Inf(1), math.NaN(), billingexpr.MaxAudioBillingSeconds + 1} {
+		_, _, err := billingexpr.RunExpr(`usd(audio_seconds * 0.01)`, billingexpr.TokenParams{AudioSeconds: seconds})
+		require.Error(t, err)
+	}
+}

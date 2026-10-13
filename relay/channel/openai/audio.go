@@ -9,6 +9,7 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/logger"
+	"github.com/QuantumNous/new-api/pkg/billingexpr"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relay/helper"
 	"github.com/QuantumNous/new-api/relaykit/dto"
@@ -128,6 +129,25 @@ func OpenaiSTTHandler(c *gin.Context, resp *http.Response, info *relaycommon.Rel
 		Usage *dto.Usage `json:"usage"`
 	}
 	if err := common.Unmarshal(responseBody, &responseData); err == nil && responseData.Usage != nil {
+		// Duration-based ASR returns usage.type=duration, not token counts.
+		var measured struct {
+			Usage struct {
+				Type               string   `json:"type"`
+				Seconds            *float64 `json:"seconds"`
+				PromptAudioSeconds *float64 `json:"prompt_audio_seconds"`
+			} `json:"usage"`
+		}
+		if common.Unmarshal(responseBody, &measured) == nil {
+			seconds := measured.Usage.PromptAudioSeconds
+			if measured.Usage.Type == "duration" {
+				seconds = measured.Usage.Seconds
+			}
+			if seconds != nil {
+				if !math.IsNaN(*seconds) && !math.IsInf(*seconds, 0) && *seconds > 0 && *seconds <= billingexpr.MaxAudioBillingSeconds {
+					info.BillingAudioSeconds = seconds
+				}
+			}
+		}
 		if responseData.Usage.TotalTokens > 0 {
 			usage := responseData.Usage
 			if usage.PromptTokens == 0 {

@@ -283,6 +283,8 @@ func TestManualMaintainedPriceCatalog(t *testing.T) {
 		valid                                              bool
 	}{
 		{"token contract", "https://example.org/pricing", "token", expression, expression, true},
+		{"measured duration", "https://example.org/pricing", "measured", `tier("audio", usd(audio_seconds / 60 * 0.0045))`, `tier("audio", usd(audio_seconds / 60 * 0.0045))`, true},
+		{"measured missing quantities", "https://example.org/pricing", "measured", expression, expression, false},
 		{"request contract", "https://example.org/pricing", "request", `tier("standard", fixed(0.1))`, `tier("standard", fixed(0.1))`, true},
 		{"fixed token mismatch", "https://example.org/pricing", "token", `tier("standard", fixed(0.1))`, `tier("standard", fixed(0.1))`, false},
 		{"token request mismatch", "https://example.org/pricing", "request", expression, expression, false},
