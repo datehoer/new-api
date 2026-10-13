@@ -118,6 +118,7 @@ type RelayInfo struct {
 	AudioUsage          bool
 	BillingAudioSeconds *float64
 	BillingTextChars    float64
+	BillingOCRPages     float64
 	ReasoningEffort     string
 	// ReasoningConversion is the suffix-derived reasoning intent attached
 	// after model mapping. Converters read it via ReasoningState().

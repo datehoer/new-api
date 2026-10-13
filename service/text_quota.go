@@ -64,6 +64,7 @@ type textQuotaSummary struct {
 	ToolSurchargeItems     []ToolSurchargeItem
 	ToolCallSurchargeQuota decimal.Decimal
 	FixedPriceBilling      bool
+	MeasuredUsageBilling   bool
 }
 
 // hasBillableUsage reports whether this request should incur any charge.
@@ -71,7 +72,7 @@ type textQuotaSummary struct {
 // surcharge (e.g. /v1/alpha/search returns no usage but bills one web_search
 // call), so token count alone is not sufficient to decide.
 func (s *textQuotaSummary) hasBillableUsage() bool {
-	return s.FixedPriceBilling || s.TotalTokens > 0 || !s.ToolCallSurchargeQuota.IsZero()
+	return s.MeasuredUsageBilling || s.FixedPriceBilling || s.TotalTokens > 0 || !s.ToolCallSurchargeQuota.IsZero()
 }
 
 func cacheWriteTokensTotal(summary textQuotaSummary) int {
@@ -418,6 +419,7 @@ func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, us
 			tieredResult = tieredRes
 			summary.Quota = composeTieredTextQuota(relayInfo, summary, tieredQuota, tieredRes)
 			summary.FixedPriceBilling = isFixedPriceSettlement(relayInfo, tieredRes)
+			summary.MeasuredUsageBilling = tieredUsedVars["ocr_pages"] && (relayInfo.BillingOCRPages > 0 || (tieredRes == nil && tieredQuota > 0))
 			if summary.FixedPriceBilling {
 				summary.AudioInputPrice = 0
 			}

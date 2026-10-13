@@ -115,7 +115,11 @@ func runFixedPriceAccountingCases(t *testing.T, db, logDB *gorm.DB) {
 		want                                      int
 		unit                                      billingexpr.BillingUnit
 		requestedImages, actualImages             int
+		reservedPages, actualPages                int
 	}{
+		{name: "OCR pages settle without token usage", expression: `tier("pages", usd(ocr_pages * 0.002))`, reservedPages: 5, actualPages: 2, usage: &dto.Usage{}, want: 2000, unit: billingexpr.BillingUnitToken},
+		{name: "OCR annotated pages retain higher rate", expression: `tier("annotations", usd(ocr_pages * 0.003))`, reservedPages: 5, actualPages: 2, usage: &dto.Usage{}, want: 3000, unit: billingexpr.BillingUnitToken},
+		{name: "OCR failure refunds reservation", expression: `tier("pages", usd(ocr_pages * 0.002))`, reservedPages: 5, refund: true},
 		{name: "missing usage charges once", expression: flat, want: 5000, unit: billingexpr.BillingUnitRequest},
 		{name: "zero usage charges once", expression: flat, usage: &dto.Usage{}, want: 5000, unit: billingexpr.BillingUnitRequest},
 		{name: "stream charges once", expression: flat, stream: true, usage: &dto.Usage{PromptTokens: 100, CompletionTokens: 20, TotalTokens: 120}, want: 5000, unit: billingexpr.BillingUnitRequest},
@@ -169,13 +173,14 @@ func runFixedPriceAccountingCases(t *testing.T, db, logDB *gorm.DB) {
 			if tc.requestedImages > 0 {
 				request.ImageCount = &tc.requestedImages
 			}
-			cost, trace, err := billingexpr.RunExprWithRequest(tc.expression, billingexpr.TokenParams{P: float64(tc.estimate), Len: float64(tc.estimate)}, *request)
+			cost, trace, err := billingexpr.RunExprWithRequest(tc.expression, billingexpr.TokenParams{P: float64(tc.estimate), Len: float64(tc.estimate), OCRPages: float64(tc.reservedPages)}, *request)
 			require.NoError(t, err)
 			reservation, err := billingexpr.QuotaRoundStrict(cost / 1_000_000 * common.QuotaPerUnit * group)
 			require.NoError(t, err)
 			snapshot := &billingexpr.BillingSnapshot{BillingMode: "tiered_expr", ExprString: tc.expression, ExprHash: billingexpr.ExprHashString(tc.expression), QuotaPerUnit: common.QuotaPerUnit, GroupRatio: group, EstimatedTier: trace.MatchedTier, EstimatedBillingUnit: trace.BillingUnit, EstimatedFixedPrice: trace.FixedPrice, EstimatedQuotaAfterGroup: reservation}
 			snapshot.EstimatedImageCount = trace.ImageCount
 			info := &relaycommon.RelayInfo{UserId: user.Id, TokenId: token.Id, TokenKey: token.Key, ChannelMeta: &relaycommon.ChannelMeta{ChannelId: channel.Id}, OriginModelName: "fixed-test", UsingGroup: "default", UserGroup: "default", UserSetting: dto.UserSetting{BillingPreference: "wallet_only"}, ForcePreConsume: true, StartTime: time.Now(), IsStream: tc.stream, RelayFormat: types.RelayFormatOpenAI, PriceData: hosttypes.PriceData{GroupRatioInfo: hosttypes.GroupRatioInfo{GroupRatio: group}}, TieredBillingSnapshot: snapshot, BillingRequestInput: request}
+			info.BillingOCRPages = float64(tc.actualPages)
 			info.SetEstimatePromptTokens(tc.estimate)
 			ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
 			ctx.Request = httptest.NewRequest("POST", "/v1/chat/completions", nil)
@@ -245,6 +250,13 @@ func runFixedPriceAccountingCases(t *testing.T, db, logDB *gorm.DB) {
 					var other map[string]any
 					require.NoError(t, common.UnmarshalJsonStr(log.Other, &other))
 					assert.Equal(t, string(tc.unit), other["billing_unit"])
+					if tc.reservedPages > 0 {
+						billable, ok := other["billing_tokens"].(map[string]any)
+						require.True(t, ok)
+						assert.Equal(t, float64(tc.actualPages), billable["ocr_pages"])
+						assert.Zero(t, log.PromptTokens)
+						assert.Zero(t, log.CompletionTokens)
+					}
 					if tc.requestedImages > 0 {
 						count := tc.actualImages
 						if count == 0 {
@@ -273,7 +285,7 @@ func runFixedPriceAccountingCases(t *testing.T, db, logDB *gorm.DB) {
 							assert.Equal(t, float64(100), billable["cr"])
 							assert.Equal(t, float64(400), billable["img"])
 						}
-					} else {
+					} else if tc.reservedPages == 0 {
 						assert.NotContains(t, other, "billing_tokens")
 						assert.NotContains(t, other, "image_cache_tokens")
 					}

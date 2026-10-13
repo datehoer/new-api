@@ -73,6 +73,12 @@ func ModelPriceHelper(c *gin.Context, info *relaycommon.RelayInfo, promptTokens 
 		}
 	}
 	billingModelName := info.GetBillingModelName()
+	if info.RelayMode == relayconstant.RelayModeOCR {
+		expression, exists := billing_setting.GetBillingExpr(billingModelName)
+		if !exists || billing_setting.GetBillingMode(billingModelName) != billing_setting.BillingModeTieredExpr || !billingexpr.UsedVars(expression)["ocr_pages"] {
+			return hosttypes.PriceData{}, errors.New("OCR requires a page-based billing expression")
+		}
+	}
 	modelPrice, usePrice := ratio_setting.GetModelPrice(billingModelName, false)
 
 	groupRatioInfo := HandleGroupRatio(c, info)
@@ -375,6 +381,15 @@ func modelPriceHelperTiered(c *gin.Context, info *relaycommon.RelayInfo, billing
 		Len: float64(promptTokens),
 	}
 	used := billingexpr.UsedVarsByHash(exprStr, exprHash)
+	if used["ocr_pages"] {
+		r, ok := info.Request.(*OCRRequest)
+		if !ok || info.RelayMode != relayconstant.RelayModeOCR || r.PageReservation < 1 || r.PageReservation > billingexpr.MaxOCRPages {
+			return hosttypes.PriceData{}, errors.New("page pricing requires an OCR request")
+		}
+		info.BillingOCRPages = float64(r.PageReservation)
+		params.OCRPages = info.BillingOCRPages
+		info.ForcePreConsume = true
+	}
 	if used["audio_seconds"] {
 		if info.RelayMode != relayconstant.RelayModeAudioTranscription && info.RelayMode != relayconstant.RelayModeAudioTranslation {
 			return hosttypes.PriceData{}, errors.New("audio duration pricing requires a file transcription or translation request")

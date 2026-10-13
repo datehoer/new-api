@@ -50,7 +50,7 @@ func ComputeTieredQuotaWithRequest(snap *BillingSnapshot, params TokenParams, re
 		Clamp:                  clamp,
 	}
 	used := UsedVarsByHash(snap.ExprString, snap.ExprHash)
-	if trace.BillingUnit == BillingUnitToken && (used["img_cr"] || used["ai_cr"] || used["audio_seconds"] || used["text_chars"]) {
+	if trace.BillingUnit == BillingUnitToken && (used["img_cr"] || used["ai_cr"] || used["audio_seconds"] || used["text_chars"] || used["ocr_pages"]) {
 		result.BillingTokens = &params
 	}
 	return result, nil

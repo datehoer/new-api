@@ -248,6 +248,7 @@ func TryTieredSettle(relayInfo *relaycommon.RelayInfo, params billingexpr.TokenP
 		params.AudioSeconds = *relayInfo.BillingAudioSeconds
 	}
 	params.TextChars = relayInfo.BillingTextChars
+	params.OCRPages = relayInfo.BillingOCRPages
 	if relayInfo.BillingRequestInput != nil {
 		requestInput = *relayInfo.BillingRequestInput
 	}

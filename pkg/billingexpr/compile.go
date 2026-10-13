@@ -139,6 +139,7 @@ var compileEnvPrototypeV1 = map[string]any{
 	"ai_cr":         float64(0),
 	"ao":            float64(0),
 	"audio_seconds": float64(0),
+	"ocr_pages":     float64(0),
 	"text_chars":    float64(0),
 	"usd":           func(float64) float64 { return 0 },
 	"tier":          func(string, float64) float64 { return 0 },

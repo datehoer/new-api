@@ -2,7 +2,11 @@ package mistral
 
 import (
 	"errors"
+	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/pkg/billingexpr"
+	"github.com/QuantumNous/new-api/service"
 	"io"
+	"math"
 	"net/http"
 
 	"github.com/QuantumNous/new-api/relay/channel"
@@ -85,6 +89,25 @@ func (a *Adaptor) DoRequest(c *gin.Context, info *relaycommon.RelayInfo, request
 }
 
 func (a *Adaptor) DoResponse(c *gin.Context, resp *http.Response, info *relaycommon.RelayInfo) (usage any, err *types.NewAPIError) {
+	if info.RelayMode == relayconstant.RelayModeOCR {
+		defer service.CloseResponseBodyGracefully(resp)
+		body, readErr := io.ReadAll(resp.Body)
+		if readErr != nil {
+			return nil, types.NewError(readErr, types.ErrorCodeReadResponseBodyFailed, types.ErrOptionWithSkipRetry())
+		}
+		var decoded struct {
+			Usage struct {
+				Pages *int `json:"pages_processed"`
+			} `json:"usage_info"`
+		}
+		reservedPages := info.BillingOCRPages
+		info.BillingOCRPages = math.NaN()
+		if common.Unmarshal(body, &decoded) == nil && decoded.Usage.Pages != nil && *decoded.Usage.Pages > 0 && *decoded.Usage.Pages <= billingexpr.MaxOCRPages && float64(*decoded.Usage.Pages) <= reservedPages {
+			info.BillingOCRPages = float64(*decoded.Usage.Pages)
+		}
+		service.IOCopyBytesGracefully(c, resp, body)
+		return &dto.Usage{}, nil
+	}
 	if info.RelayMode == relayconstant.RelayModeAudioTranscription {
 		err, usage = openai.OpenaiSTTHandler(c, resp, info, a.AudioFormat)
 		return

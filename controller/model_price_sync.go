@@ -328,8 +328,8 @@ func readModelPriceCatalog(reader io.Reader) (map[string]string, error) {
 				}
 				if metadata.Unit == "measured" {
 					used := billingexpr.UsedVars(expression)
-					if !used["audio_seconds"] && !used["text_chars"] {
-						return nil, errors.New("measured pricing requires duration or character usage")
+					if !used["audio_seconds"] && !used["text_chars"] && !used["ocr_pages"] {
+						return nil, errors.New("measured pricing requires a supported physical quantity")
 					}
 				}
 				if err := billing_setting.SmokeTestExpr(expression); err != nil {

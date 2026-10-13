@@ -56,6 +56,9 @@ func runProgram(prog *vm.Program, requestRules []RequestRuleTrace, usedVars map[
 		RequestRules: append([]RequestRuleTrace(nil), requestRules...),
 	}
 	headers := normalizeHeaders(request.Headers)
+	if usedVars["ocr_pages"] && (math.IsNaN(params.OCRPages) || math.IsInf(params.OCRPages, 0) || params.OCRPages < 0 || params.OCRPages > MaxOCRPages || math.Trunc(params.OCRPages) != params.OCRPages) {
+		return 0, trace, fmt.Errorf("ocr_pages is outside the supported range")
+	}
 	if usedVars["audio_seconds"] && (math.IsNaN(params.AudioSeconds) || math.IsInf(params.AudioSeconds, 0) || params.AudioSeconds < 0 || params.AudioSeconds > MaxAudioBillingSeconds) {
 		return 0, trace, fmt.Errorf("audio_seconds is outside the supported range")
 	}
@@ -88,6 +91,7 @@ func runProgram(prog *vm.Program, requestRules []RequestRuleTrace, usedVars map[
 		"ai_cr":         params.AICR,
 		"ao":            params.AO,
 		"audio_seconds": params.AudioSeconds,
+		"ocr_pages":     params.OCRPages,
 		"text_chars":    params.TextChars,
 		"usd":           func(amount float64) float64 { return amount * 1_000_000 },
 		"tier": func(name string, value float64) float64 {

@@ -575,3 +575,17 @@ valid upstream `usage.type=duration/seconds` or Mistral `prompt_audio_seconds`
 can replace file duration. Missing/invalid measurements retain the upload duration.
 Logs retain the actual seconds/characters in `billing_tokens`. The token counters
 remain available for old contracts; they do not determine measured charges.
+
+### Native OCR pages
+
+`ocr_pages` is the number of pages returned by Mistral `usage_info.pages_processed`.
+The `/v1/ocr` route uses API-token authentication and existing channel selection.
+It rejects incompatible channels and token-based prices before submission.
+Explicit page indexes/ranges are deduplicated and bounded to 1000 selected pages;
+images reserve one page; documents require explicit page selection. The
+outbound selection is normalized to sorted unique indexes so reservation and
+provider processing refer to the same pages.
+The reservation is forced before upstream submission; settlement uses valid
+reported page counts. Missing/invalid counters retain the reservation and do
+not produce a synthetic token count. Annotation parameters stay frozen in the
+original native JSON body. Page measurements appear in `billing_tokens`.

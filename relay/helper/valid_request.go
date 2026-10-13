@@ -24,7 +24,11 @@ func GetAndValidateRequest(c *gin.Context, format types.RelayFormat) (request dt
 
 	switch format {
 	case types.RelayFormatOpenAI:
-		request, err = GetAndValidateTextRequest(c, relayMode)
+		if relayMode == relayconstant.RelayModeOCR {
+			request, err = GetAndValidateOCRRequest(c)
+		} else {
+			request, err = GetAndValidateTextRequest(c, relayMode)
+		}
 	case types.RelayFormatGemini:
 		if strings.Contains(c.Request.URL.Path, ":embedContent") {
 			request, err = GetAndValidateGeminiEmbeddingRequest(c)

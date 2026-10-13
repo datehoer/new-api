@@ -33,10 +33,12 @@ type TokenParams struct {
 	AICR         float64 // audio cache read tokens, separated only when explicitly priced
 	AO           float64 // audio output tokens
 	AudioSeconds float64 // measured audio input duration, without token conversion
+	OCRPages     float64
 	TextChars    float64 // Unicode code points in the speech input
 }
 
 const MaxAudioBillingSeconds = 24 * 60 * 60
+const MaxOCRPages = 1000
 
 // RequestRuleTrace describes one request-dependent multiplier detected at compile time.
 type RequestRuleTrace struct {

@@ -229,7 +229,8 @@ func smokeTestExpr(exprStr string) error {
 		{P: 100, C: 50, Len: 1000, CR: 100, AI: 600, AICR: 200, AO: 50},
 		{Len: math.MaxInt32, AICR: math.MaxInt32},
 		{AudioSeconds: 0.125, TextChars: 1},
-		{AudioSeconds: 60, TextChars: 1000},
+		{AudioSeconds: 60, TextChars: 1000, OCRPages: 10},
+		{OCRPages: billingexpr.MaxOCRPages},
 		{AudioSeconds: billingexpr.MaxAudioBillingSeconds, TextChars: math.MaxInt32},
 	}
 
