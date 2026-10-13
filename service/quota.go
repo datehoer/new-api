@@ -85,6 +85,14 @@ func calculateAudioQuota(info QuotaInfo) (int, *common.QuotaClamp) {
 	return common.QuotaFromDecimalChecked(quota)
 }
 
+func realtimeBillingParams(info *relaycommon.RelayInfo, usage *dto.RealtimeUsage) billingexpr.TokenParams {
+	used := map[string]bool{}
+	if info.TieredBillingSnapshot != nil {
+		used = billingexpr.UsedVarsByHash(info.TieredBillingSnapshot.ExprString, info.TieredBillingSnapshot.ExprHash)
+	}
+	return BuildTieredTokenParams(&dto.Usage{PromptTokens: usage.InputTokens, CompletionTokens: usage.OutputTokens, PromptTokensDetails: usage.InputTokenDetails, CompletionTokenDetails: usage.OutputTokenDetails}, false, used)
+}
+
 func PreWssConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, usage *dto.RealtimeUsage) error {
 	if relayInfo.UsePrice {
 		return nil
@@ -137,6 +145,9 @@ func PreWssConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, usag
 
 	quota, clamp := calculateAudioQuota(quotaInfo)
 	noteQuotaClamp(relayInfo, clamp)
+	if ok, tieredQuota, _ := TryTieredSettle(relayInfo, realtimeBillingParams(relayInfo, usage)); ok {
+		quota = tieredQuota
+	}
 
 	if userQuota < quota {
 		return fmt.Errorf("user quota is not enough, user quota: %s, need quota: %s", logger.FormatQuota(userQuota), logger.FormatQuota(quota))
@@ -158,11 +169,7 @@ func PostWssConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, mod
 	usage *dto.RealtimeUsage, extraContent []*common.Message) {
 
 	var tieredResult *billingexpr.TieredResult
-	tieredOk, tieredQuota, tieredRes := TryTieredSettle(relayInfo, billingexpr.TokenParams{
-		P:   float64(usage.InputTokens),
-		C:   float64(usage.OutputTokens),
-		Len: float64(usage.InputTokens),
-	})
+	tieredOk, tieredQuota, tieredRes := TryTieredSettle(relayInfo, realtimeBillingParams(relayInfo, usage))
 	if tieredOk {
 		tieredResult = tieredRes
 	}

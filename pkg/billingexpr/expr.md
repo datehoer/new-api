@@ -38,6 +38,7 @@ Powered by [expr-lang/expr](https://github.com/expr-lang/expr). Expressions are 
 | `img` | 图片输入 token 数 |
 | `img_cr` | 图片缓存读取 token 数；只有表达式显式引用且上游提供有效缓存模态明细时才单独拆分 |
 | `ai` | 音频输入 token 数 |
+| `ai_cr` | 音频缓存读取 token 数；仅在表达式引用且上游提供有效音频缓存明细时独立拆分 |
 
 **输出侧变量：**
 
@@ -95,6 +96,13 @@ Anthropic 的独立缓存计数语义不采用这一 OpenAI 图片拆分。
 内置图片价格使用 `c`，无需上游额外报告 `output_tokens_details.image_tokens`。
 
 ### 旧定价转换
+
+音频缓存拆分遵循图片缓存的交集规则：`ai_cr` 同时从 `ai` 和 `cr` 中移出，
+再从普通输入余量中独立扣除，保持 `len` 不变。缺少或无效的音频缓存明细时
+沿用原有聚合计费；未引用 `ai_cr` 的旧表达式保持原有行为。
+Realtime 的每次 response usage 和会话累计 usage 都保留文本、图片、音频及缓存
+子类别；逐次扣费和最终结算使用相同的分类归一化，避免把音频计作普通文本。
+归一化计价用量写入消费日志的 `billing_tokens`，音频缓存数写入 `audio_cache_tokens`。
 
 旧倍率和旧按次模式仍可运行，管理界面标记为弃用，新建定价默认使用表达式。
 `POST /api/option/model_pricing/convert` 接收 `{model_name, pricing}`，其中 `pricing`

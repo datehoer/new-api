@@ -68,6 +68,37 @@ func BuildTieredTokenParams(usage *dto.Usage, isClaudeUsageSemantic bool, usedVa
 		}
 	}
 	ai := float64(usage.PromptTokensDetails.AudioTokens)
+	aiCR := float64(0)
+	if usedVars["ai_cr"] && !isClaudeUsageSemantic {
+		details := usage.PromptTokensDetails.CachedTokensDetails
+		if details != nil && details.AudioTokens != nil {
+			cachedAudio := *details.AudioTokens
+			cached := usage.PromptTokensDetails.CachedTokens
+			audio := usage.PromptTokensDetails.AudioTokens
+			valid := cachedAudio >= 0 && cached >= cachedAudio && audio >= cachedAudio &&
+				cached <= usage.PromptTokens && audio <= usage.PromptTokens-(cached-cachedAudio)
+			if valid {
+				remaining := cached - cachedAudio
+				for _, count := range []*int{details.TextTokens, details.ImageTokens} {
+					if count == nil {
+						continue
+					}
+					if *count < 0 || *count > remaining {
+						valid = false
+						break
+					}
+					remaining -= *count
+				}
+			}
+			if valid {
+				aiCR = float64(cachedAudio)
+				cr -= aiCR
+				ai -= aiCR
+			} else {
+				common.SysError(common.LogText("invalid audio cache token breakdown; using aggregate cache billing"))
+			}
+		}
+	}
 	imgO := float64(usage.CompletionTokenDetails.ImageTokens)
 	ao := float64(usage.CompletionTokenDetails.AudioTokens)
 
@@ -104,6 +135,9 @@ func BuildTieredTokenParams(usage *dto.Usage, isClaudeUsageSemantic bool, usedVa
 		if usedVars["ai"] {
 			p -= ai
 		}
+		if usedVars["ai_cr"] {
+			p -= aiCR
+		}
 		if usedVars["img_o"] {
 			c -= imgO
 		}
@@ -132,6 +166,7 @@ func BuildTieredTokenParams(usage *dto.Usage, isClaudeUsageSemantic bool, usedVa
 		ImgCR: imgCR,
 		ImgO:  imgO,
 		AI:    ai,
+		AICR:  aiCR,
 		AO:    ao,
 	}
 }

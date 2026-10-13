@@ -1,6 +1,7 @@
 package controller
 
 import (
+	"fmt"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/pkg/billingexpr"
 	"os"
@@ -244,6 +245,64 @@ func TestModelPriceSourceDatabaseMatrix(t *testing.T) {
 			snapshot, err = model.GetModelPricingSnapshot([]string{name})
 			require.NoError(t, err)
 			assert.NotContains(t, snapshot.Entries[0].Configured, billing_setting.PriceSourceOption)
+		})
+	}
+}
+
+func TestOpenRouterTimeAndAudioPrices(t *testing.T) {
+	input := `{"data":[{"id":"scheduled","pricing":{"prompt":"0.000002","completion":"0.00001","input_cache_read":"0.0000001","overrides":[{"utc_days":["saturday","sunday"],"prompt":"0.000001"},{"utc_start":2300,"utc_end":100,"completion":"0.000005"}]}},{"id":"audio","pricing":{"prompt":"0.000002","completion":"0.00001","input_cache_read":"0.0000001","audio":"0.000005","input_audio_cache":"0.0000005"}}]}`
+	prices, err := readOpenRouterExpressions(strings.NewReader(input))
+	require.NoError(t, err)
+	for _, tc := range []struct {
+		name              string
+		day, hour, minute int
+		want              float64
+	}{
+		{"weekend", 6, 12, 0, 2010}, {"weekday night", 2, 23, 30, 2510}, {"night end is exclusive", 2, 1, 0, 3010},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			expr := strings.NewReplacer(`weekday("UTC")`, fmt.Sprint(tc.day), `hour("UTC")`, fmt.Sprint(tc.hour), `minute("UTC")`, fmt.Sprint(tc.minute)).Replace(prices["scheduled"])
+			cost, _, err := billingexpr.RunExpr(expr, billingexpr.TokenParams{P: 1000, C: 100, CR: 100})
+			require.NoError(t, err)
+			assert.InDelta(t, tc.want, cost, 0.00001)
+		})
+	}
+	cost, _, err := billingexpr.RunExpr(prices["audio"], billingexpr.TokenParams{P: 100, C: 10, CR: 100, AI: 50, AICR: 100})
+	require.NoError(t, err)
+	assert.Equal(t, float64(610), cost)
+	for _, override := range []string{`{"utc_start":2360,"utc_end":100}`, `{"utc_start":100}`, `{"utc_days":["sunday","sunday"]}`, `{"min_prompt_tokens":100,"utc_days":["sunday"]}`} {
+		_, err := readOpenRouterExpressions(strings.NewReader(`{"data":[{"id":"bad","pricing":{"prompt":"0","completion":"0","overrides":[` + override + `]}}]}`))
+		require.Error(t, err)
+	}
+}
+
+func TestManualMaintainedPriceCatalog(t *testing.T) {
+	expression := `tier("standard", p * 2 + c * 10)`
+	for _, tc := range []struct {
+		name, source, unit, metadataExpression, expression string
+		valid                                              bool
+	}{
+		{"token contract", "https://example.org/pricing", "token", expression, expression, true},
+		{"request contract", "https://example.org/pricing", "request", `tier("standard", fixed(0.1))`, `tier("standard", fixed(0.1))`, true},
+		{"fixed token mismatch", "https://example.org/pricing", "token", `tier("standard", fixed(0.1))`, `tier("standard", fixed(0.1))`, false},
+		{"token request mismatch", "https://example.org/pricing", "request", expression, expression, false},
+		{"task contract", "https://example.org/pricing", "task_usage", `u("seconds") * 0.1`, `u("seconds") * 0.1`, true},
+		{"insecure reference", "http://example.org/pricing", "token", expression, expression, false},
+		{"credential in reference", "https://user:pass@example.org/pricing", "token", expression, expression, false},
+		{"metadata mismatch", "https://example.org/pricing", "token", expression, `tier("standard", p * 3)`, false},
+		{"negative price", "https://example.org/pricing", "token", `tier("standard", p * -2)`, `tier("standard", p * -2)`, false},
+		{"unknown unit", "https://example.org/pricing", "unknown", expression, expression, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			body, err := common.Marshal(map[string]any{"schema_version": 2, "success": true, "data": map[string]any{"billing_mode": map[string]string{"m": "tiered_expr"}, "billing_expr": map[string]string{"m": tc.expression}}, "source_metadata": map[string]any{"m": map[string]string{"source": "official_manual", "source_url": tc.source, "unit": tc.unit, "expression": tc.metadataExpression}}})
+			require.NoError(t, err)
+			result, err := readModelPriceCatalog(strings.NewReader(string(body)))
+			if tc.valid {
+				require.NoError(t, err)
+				assert.Equal(t, tc.expression, result["m"])
+			} else {
+				require.Error(t, err)
+			}
 		})
 	}
 }

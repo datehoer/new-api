@@ -30,6 +30,7 @@ type TokenParams struct {
 	ImgCR float64 // image cache read tokens, separated only when explicitly priced
 	ImgO  float64 // image output tokens
 	AI    float64 // audio input tokens
+	AICR  float64 // audio cache read tokens, separated only when explicitly priced
 	AO    float64 // audio output tokens
 }
 

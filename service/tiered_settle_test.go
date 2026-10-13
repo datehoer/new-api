@@ -792,6 +792,48 @@ func TestImageCacheBilling(t *testing.T) {
 	}
 }
 
+func TestAudioCacheBilling(t *testing.T) {
+	const expression = `tier("standard", p * 2 + c * 10 + cr * 0.5 + ai * 32 + ai_cr * 0.4)`
+	for _, tc := range []struct {
+		name                      string
+		details                   *dto.CachedTokenDetails
+		expression                string
+		p, cr, audio, cachedAudio float64
+		quota                     int
+	}{
+		{"mixed text and audio cache", &dto.CachedTokenDetails{AudioTokens: common.GetPointer(200), TextTokens: common.GetPointer(100)}, expression, 300, 100, 400, 200, 7265},
+		{"explicit free audio cache", &dto.CachedTokenDetails{AudioTokens: common.GetPointer(200)}, `tier("standard", p * 2 + c * 10 + cr * 0.5 + ai * 32 + ai_cr * 0)`, 300, 100, 400, 200, 7225},
+		{"missing breakdown", nil, expression, 100, 300, 600, 0, 10275},
+		{"negative count", &dto.CachedTokenDetails{AudioTokens: common.GetPointer(-1)}, expression, 100, 300, 600, 0, 10275},
+		{"count exceeds total cache", &dto.CachedTokenDetails{AudioTokens: common.GetPointer(301)}, expression, 100, 300, 600, 0, 10275},
+		{"modality sum exceeds cache", &dto.CachedTokenDetails{AudioTokens: common.GetPointer(200), ImageTokens: common.GetPointer(101)}, expression, 100, 300, 600, 0, 10275},
+		{"old expression unchanged", &dto.CachedTokenDetails{AudioTokens: common.GetPointer(200)}, `tier("standard", p * 2 + c * 10 + cr * 0.5 + ai * 32)`, 100, 300, 600, 0, 10275},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			usage := &dto.Usage{PromptTokens: 1000, CompletionTokens: 100, PromptTokensDetails: dto.InputTokenDetails{CachedTokens: 300, AudioTokens: 600, CachedTokensDetails: tc.details}}
+			params := BuildTieredTokenParams(usage, false, billingexpr.UsedVars(tc.expression))
+			assert.Equal(t, tc.p, params.P)
+			assert.Equal(t, tc.cr, params.CR)
+			assert.Equal(t, tc.audio, params.AI)
+			assert.Equal(t, tc.cachedAudio, params.AICR)
+			result, err := billingexpr.ComputeTieredQuota(makeSnapshot(tc.expression, 1, 1000, 100), params)
+			require.NoError(t, err)
+			assert.Equal(t, tc.quota, result.ActualQuotaAfterGroup)
+		})
+	}
+	const mixed = `tier("standard", p * 2 + c * 10 + cr * 0.5 + img * 8 + img_cr * 2 + ai * 32 + ai_cr * 0.4)`
+	usage := &dto.Usage{PromptTokens: 1000, CompletionTokens: 100, PromptTokensDetails: dto.InputTokenDetails{CachedTokens: 500, AudioTokens: 500, ImageTokens: 300, CachedTokensDetails: &dto.CachedTokenDetails{AudioTokens: common.GetPointer(200), ImageTokens: common.GetPointer(200), TextTokens: common.GetPointer(100)}}}
+	params := BuildTieredTokenParams(usage, false, billingexpr.UsedVars(mixed))
+	assert.Equal(t, float64(100), params.P)
+	assert.Equal(t, float64(100), params.CR)
+	assert.Equal(t, float64(200), params.ImgCR)
+	assert.Equal(t, float64(200), params.AICR)
+	result, err := billingexpr.ComputeTieredQuota(makeSnapshot(mixed, 1, 1000, 100), params)
+	require.NoError(t, err)
+	assert.Equal(t, 6065, result.ActualQuotaAfterGroup)
+	require.NotNil(t, result.BillingTokens)
+}
+
 func TestBuildTieredTokenParams_Claude_WithCache(t *testing.T) {
 	usage := &dto.Usage{
 		PromptTokens:     800,
@@ -1091,4 +1133,18 @@ func TestSamePriceCacheReadsRemainInInput(t *testing.T) {
 			assert.Equal(t, separateParams.Len, params.Len, "tier conditions keep the full context length")
 		})
 	}
+}
+
+func TestRealtimeBillingNormalizesAudioAndCache(t *testing.T) {
+	expr := `tier("standard", p * 2 + c * 10 + cr * 0.5 + ai * 32 + ai_cr * 0.4 + ao * 64)`
+	info := makeRelayInfo(expr, 1, 1000, 100)
+	usage := &dto.RealtimeUsage{InputTokens: 1000, OutputTokens: 100, InputTokenDetails: dto.InputTokenDetails{AudioTokens: 600, CachedTokens: 300, CachedTokensDetails: &dto.CachedTokenDetails{AudioTokens: common.GetPointer(200), TextTokens: common.GetPointer(100)}}, OutputTokenDetails: dto.OutputTokenDetails{AudioTokens: 20}}
+	params := realtimeBillingParams(info, usage)
+	assert.Equal(t, float64(300), params.P)
+	assert.Equal(t, float64(400), params.AI)
+	assert.Equal(t, float64(200), params.AICR)
+	assert.Equal(t, float64(80), params.C)
+	ok, quota, _ := TryTieredSettle(info, params)
+	require.True(t, ok)
+	assert.Equal(t, 7805, quota)
 }

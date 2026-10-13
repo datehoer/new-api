@@ -7,6 +7,7 @@ import (
 	"io"
 	"maps"
 	"net/http"
+	"net/url"
 	"slices"
 	"strconv"
 	"strings"
@@ -14,6 +15,7 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
+	"github.com/QuantumNous/new-api/pkg/billingexpr"
 	"github.com/QuantumNous/new-api/setting/billing_setting"
 	"github.com/gin-gonic/gin"
 	"github.com/shopspring/decimal"
@@ -25,84 +27,200 @@ type openRouterPrices struct {
 	CacheRead    string `json:"input_cache_read"`
 	CacheWrite   string `json:"input_cache_write"`
 	CacheWrite1h string `json:"input_cache_write_1h"`
+	Audio        string `json:"audio"`
+	AudioCache   string `json:"input_audio_cache"`
+	AudioOutput  string `json:"audio_output"`
 }
-
+type openRouterOverride struct {
+	openRouterPrices
+	MinPromptTokens *int64   `json:"min_prompt_tokens"`
+	UTCDays         []string `json:"utc_days"`
+	UTCStart        *int     `json:"utc_start"`
+	UTCEnd          *int     `json:"utc_end"`
+}
 type openRouterPricing struct {
 	openRouterPrices
-	Overrides []struct {
-		openRouterPrices
-		MinPromptTokens int64 `json:"min_prompt_tokens"`
-	} `json:"overrides"`
+	Overrides []openRouterOverride `json:"overrides"`
 }
 
-// Generate a complete local contract. Missing/invalid Claude cache categories
-// and invalid tiers reject that model rather than publishing partial prices.
+// Preserve provider context, UTC schedule and modality prices in one contract.
 func openRouterExpression(id string, pricing openRouterPricing) (string, error) {
 	if strings.Contains(strings.ToLower(id), "claude") && (pricing.CacheRead == "" || pricing.CacheWrite == "" || pricing.CacheWrite1h == "") {
 		return "", errors.New("Claude cache prices are incomplete")
 	}
-	tiers := slices.Clone(pricing.Overrides)
-	slices.SortFunc(tiers, func(a, b struct {
-		openRouterPrices
-		MinPromptTokens int64 `json:"min_prompt_tokens"`
-	}) int {
-		if a.MinPromptTokens < b.MinPromptTokens {
-			return -1
+	overrides := slices.Clone(pricing.Overrides)
+	timed := false
+	for _, o := range overrides {
+		if len(o.UTCDays) > 0 || o.UTCStart != nil || o.UTCEnd != nil {
+			timed = true
 		}
-		if a.MinPromptTokens > b.MinPromptTokens {
-			return 1
+	}
+	for _, o := range overrides {
+		if timed && o.MinPromptTokens != nil {
+			return "", errors.New("mixed context and time overrides are unsupported")
 		}
-		return 0
-	})
-	previous := int64(0)
+		if !timed && (o.MinPromptTokens == nil || *o.MinPromptTokens <= 0 || *o.MinPromptTokens > 2147483647) {
+			return "", errors.New("invalid context threshold")
+		}
+	}
+	if !timed {
+		slices.SortFunc(overrides, func(a, b openRouterOverride) int {
+			if *a.MinPromptTokens < *b.MinPromptTokens {
+				return -1
+			}
+			if *a.MinPromptTokens > *b.MinPromptTokens {
+				return 1
+			}
+			return 0
+		})
+	}
 	prices := []openRouterPrices{pricing.openRouterPrices}
-	for _, override := range tiers {
-		if override.MinPromptTokens <= previous || override.MinPromptTokens > 2147483647 {
-			return "", errors.New("invalid or duplicate context threshold")
+	conditions := []string{}
+	labels := []string{"standard"}
+	previous := int64(0)
+	weekdays := map[string]int{"sunday": 0, "monday": 1, "tuesday": 2, "wednesday": 3, "thursday": 4, "friday": 5, "saturday": 6}
+	for i, o := range overrides {
+		parent := prices[len(prices)-1]
+		if timed {
+			parent = pricing.openRouterPrices
+			parts := []string{}
+			if len(o.UTCDays) > 0 {
+				days := []int{}
+				seen := map[int]bool{}
+				for _, name := range o.UTCDays {
+					day, ok := weekdays[name]
+					if !ok || seen[day] {
+						return "", errors.New("invalid UTC days")
+					}
+					seen[day] = true
+					days = append(days, day)
+				}
+				slices.Sort(days)
+				tests := []string{}
+				for _, day := range days {
+					tests = append(tests, fmt.Sprintf(`weekday("UTC") == %d`, day))
+				}
+				parts = append(parts, "("+strings.Join(tests, " || ")+")")
+			}
+			if o.UTCStart != nil || o.UTCEnd != nil {
+				if o.UTCStart == nil || o.UTCEnd == nil {
+					return "", errors.New("incomplete UTC interval")
+				}
+				start, end := *o.UTCStart, *o.UTCEnd
+				if start < 0 || start > 2359 || start%100 > 59 || end < 0 || end > 2359 || end%100 > 59 || start == end {
+					return "", errors.New("invalid UTC interval")
+				}
+				joiner := " && "
+				if start > end {
+					joiner = " || "
+				}
+				clock := `(hour("UTC") * 100 + minute("UTC"))`
+				parts = append(parts, fmt.Sprintf("(%s >= %d%s%s < %d)", clock, start, joiner, clock, end))
+			}
+			if len(parts) == 0 {
+				return "", errors.New("empty time condition")
+			}
+			conditions = append(conditions, strings.Join(parts, " && "))
+			labels = append(labels, fmt.Sprintf("utc_%d", i+1))
+		} else {
+			threshold := *o.MinPromptTokens
+			if threshold <= previous {
+				return "", errors.New("duplicate context threshold")
+			}
+			previous = threshold
+			conditions = append(conditions, fmt.Sprintf("len < %d", threshold))
+			labels = append(labels, "context_"+strconv.FormatInt(threshold, 10))
 		}
-		previous = override.MinPromptTokens
-		next := prices[len(prices)-1]
-		for _, field := range []struct {
+		for _, f := range []struct {
 			target *string
 			value  string
 		}{
-			{&next.Prompt, override.Prompt}, {&next.Completion, override.Completion},
-			{&next.CacheRead, override.CacheRead}, {&next.CacheWrite, override.CacheWrite}, {&next.CacheWrite1h, override.CacheWrite1h},
+			{&parent.Prompt, o.Prompt}, {&parent.Completion, o.Completion}, {&parent.CacheRead, o.CacheRead}, {&parent.CacheWrite, o.CacheWrite}, {&parent.CacheWrite1h, o.CacheWrite1h}, {&parent.Audio, o.Audio}, {&parent.AudioCache, o.AudioCache}, {&parent.AudioOutput, o.AudioOutput},
 		} {
-			if field.value != "" {
-				*field.target = field.value
+			if f.value != "" {
+				*f.target = f.value
 			}
 		}
-		prices = append(prices, next)
+		prices = append(prices, parent)
 	}
-	leaves := make([]string, len(prices))
-	for index, price := range prices {
-		terms := []string{}
-		for _, field := range []struct {
+	useAudio, useAudioCache, useAudioOutput := false, false, false
+	sameRate := func(a, b string) bool {
+		left, le := decimal.NewFromString(a)
+		right, re := decimal.NewFromString(b)
+		return le == nil && re == nil && left.Equal(right)
+	}
+	for _, p := range prices {
+		if p.Audio != "" && !sameRate(p.Audio, p.Prompt) {
+			useAudio = true
+		}
+		if p.AudioCache != "" && !sameRate(p.AudioCache, p.CacheRead) {
+			useAudioCache = true
+		}
+		if p.AudioOutput != "" {
+			useAudioOutput = true
+		}
+	}
+	if useAudio {
+		for _, p := range prices {
+			if p.AudioCache != "" {
+				useAudioCache = true
+			}
+		}
+	}
+	leaves := []string{}
+	present := map[string]int{}
+	for index, p := range prices {
+		fields := []struct {
 			name, value string
 			required    bool
-		}{
-			{"p", price.Prompt, true}, {"c", price.Completion, true},
-			{"cr", price.CacheRead, false}, {"cc", price.CacheWrite, false}, {"cc1h", price.CacheWrite1h, false},
-		} {
-			if field.value == "" && !field.required {
+		}{{"p", p.Prompt, true}, {"c", p.Completion, true}, {"cr", p.CacheRead, false}, {"cc", p.CacheWrite, false}, {"cc1h", p.CacheWrite1h, false}}
+		if useAudio {
+			fields = append(fields, struct {
+				name, value string
+				required    bool
+			}{"ai", p.Audio, true})
+		}
+		if useAudioCache {
+			fields = append(fields, struct {
+				name, value string
+				required    bool
+			}{"ai_cr", p.AudioCache, true})
+		}
+		if useAudioOutput {
+			fields = append(fields, struct {
+				name, value string
+				required    bool
+			}{"ao", p.AudioOutput, true})
+		}
+		terms := []string{}
+		for _, f := range fields {
+			if f.value == "" && !f.required {
 				continue
 			}
-			number, err := decimal.NewFromString(field.value)
+			number, err := decimal.NewFromString(f.value)
 			if err != nil || number.IsNegative() || number.GreaterThan(decimal.NewFromInt(1000)) {
-				return "", errors.New("invalid token price")
+				return "", errors.New("invalid or incomplete token price")
 			}
-			terms = append(terms, field.name+" * "+number.Mul(decimal.NewFromInt(1000000)).String())
+			terms = append(terms, f.name+" * "+number.Mul(decimal.NewFromInt(1000000)).String())
+			present[f.name]++
 		}
-		label := "standard"
-		if index > 0 {
-			label = "context_" + strconv.FormatInt(tiers[index-1].MinPromptTokens, 10)
+		leaves = append(leaves, "tier("+strconv.Quote(labels[index])+", "+strings.Join(terms, " + ")+")")
+	}
+	for _, n := range present {
+		if n != len(prices) {
+			return "", errors.New("incomplete category across pricing tiers")
 		}
-		leaves[index] = "tier(" + strconv.Quote(label) + ", " + strings.Join(terms, " + ") + ")"
 	}
 	expression := leaves[len(leaves)-1]
-	for i := len(tiers) - 1; i >= 0; i-- {
-		expression = "len < " + strconv.FormatInt(tiers[i].MinPromptTokens, 10) + " ? " + leaves[i] + " : " + expression
+	if timed {
+		expression = leaves[0]
+		for i := len(conditions) - 1; i >= 0; i-- {
+			expression = conditions[i] + " ? " + leaves[i+1] + " : " + expression
+		}
+	} else {
+		for i := len(conditions) - 1; i >= 0; i-- {
+			expression = conditions[i] + " ? " + leaves[i] + " : " + expression
+		}
 	}
 	if err := billing_setting.SmokeTestExpr(expression); err != nil {
 		return "", err
@@ -157,10 +275,18 @@ func fetchModelPriceCatalog(ctx context.Context) (map[string]string, error) {
 	if response.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("model-prices catalog returned HTTP %d; saved prices are retained", response.StatusCode)
 	}
+	return readModelPriceCatalog(response.Body)
+}
+
+func readModelPriceCatalog(reader io.Reader) (map[string]string, error) {
 	var catalog struct {
 		SchemaVersion  int `json:"schema_version"`
 		SourceMetadata map[string]struct {
-			Pricing openRouterPricing `json:"pricing"`
+			Pricing    openRouterPricing `json:"pricing"`
+			Source     string            `json:"source"`
+			SourceURL  string            `json:"source_url"`
+			Expression string            `json:"expression"`
+			Unit       string            `json:"unit"`
 		} `json:"source_metadata"`
 		Success bool `json:"success"`
 		Data    struct {
@@ -168,11 +294,11 @@ func fetchModelPriceCatalog(ctx context.Context) (map[string]string, error) {
 			BillingExpr map[string]string `json:"billing_expr"`
 		} `json:"data"`
 	}
-	data, err := io.ReadAll(io.LimitReader(response.Body, maxRatioConfigBytes+1))
+	data, err := io.ReadAll(io.LimitReader(reader, maxRatioConfigBytes+1))
 	if err != nil || len(data) > maxRatioConfigBytes {
 		return nil, errors.New("model-prices catalog is too large or unreadable")
 	}
-	if err := common.Unmarshal(data, &catalog); err != nil || !catalog.Success || catalog.SchemaVersion != 1 {
+	if err := common.Unmarshal(data, &catalog); err != nil || !catalog.Success || (catalog.SchemaVersion != 1 && catalog.SchemaVersion != 2) {
 		return nil, errors.New("invalid model-prices catalog")
 	}
 	result := map[string]string{}
@@ -183,6 +309,31 @@ func fetchModelPriceCatalog(ctx context.Context) (map[string]string, error) {
 		metadata, exists := catalog.SourceMetadata[name]
 		if !exists {
 			return nil, errors.New("model-prices catalog is missing price metadata")
+		}
+		if catalog.SchemaVersion == 2 && metadata.Source == "official_manual" {
+			reference, err := url.Parse(metadata.SourceURL)
+			if err != nil || reference.Scheme != "https" || reference.Hostname() == "" || reference.User != nil || metadata.Expression != expression {
+				return nil, fmt.Errorf("model-prices model %s: invalid manual source", name)
+			}
+			if _, err := billingexpr.CompileFromCache(expression); err != nil {
+				return nil, err
+			}
+			if metadata.Unit == "task_usage" {
+				if len(billingexpr.UsedUsageKeys(expression)) == 0 || billingexpr.UsesFixedPricing(expression) {
+					return nil, errors.New("invalid task usage contract")
+				}
+			} else if metadata.Unit == "token" || metadata.Unit == "request" {
+				if len(billingexpr.UsedUsageKeys(expression)) != 0 || (metadata.Unit == "request") != billingexpr.UsesFixedPricing(expression) {
+					return nil, errors.New("manual pricing unit does not match expression")
+				}
+				if err := billing_setting.SmokeTestExpr(expression); err != nil {
+					return nil, err
+				}
+			} else {
+				return nil, errors.New("invalid manual pricing unit")
+			}
+			result[name] = expression
+			continue
 		}
 		expected, err := openRouterExpression(name, metadata.Pricing)
 		if err != nil || expression != expected {

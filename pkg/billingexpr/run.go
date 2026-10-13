@@ -79,6 +79,7 @@ func runProgram(prog *vm.Program, requestRules []RequestRuleTrace, usedVars map[
 		"img_cr":      params.ImgCR,
 		"img_o":       params.ImgO,
 		"ai":          params.AI,
+		"ai_cr":       params.AICR,
 		"ao":          params.AO,
 		"tier": func(name string, value float64) float64 {
 			trace.MatchedTier = name

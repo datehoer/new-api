@@ -2,6 +2,7 @@ package openai
 
 import (
 	"fmt"
+	"math"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/logger"
@@ -125,14 +126,10 @@ func OpenaiRealtimeHandler(c *gin.Context, info *relaycommon.RelayInfo) (*types.
 				if realtimeEvent.Type == dto.RealtimeEventTypeResponseDone {
 					realtimeUsage := realtimeEvent.Response.Usage
 					if realtimeUsage != nil {
-						usage.TotalTokens += realtimeUsage.TotalTokens
-						usage.InputTokens += realtimeUsage.InputTokens
-						usage.OutputTokens += realtimeUsage.OutputTokens
-						usage.InputTokenDetails.AudioTokens += realtimeUsage.InputTokenDetails.AudioTokens
-						usage.InputTokenDetails.CachedTokens += realtimeUsage.InputTokenDetails.CachedTokens
-						usage.InputTokenDetails.TextTokens += realtimeUsage.InputTokenDetails.TextTokens
-						usage.OutputTokenDetails.AudioTokens += realtimeUsage.OutputTokenDetails.AudioTokens
-						usage.OutputTokenDetails.TextTokens += realtimeUsage.OutputTokenDetails.TextTokens
+						if err := accumulateRealtimeUsage(usage, realtimeUsage); err != nil {
+							errChan <- err
+							return
+						}
 						err := preConsumeUsage(c, info, usage, sumUsage)
 						if err != nil {
 							errChan <- fmt.Errorf("error consume usage: %v", err)
@@ -228,15 +225,56 @@ func preConsumeUsage(ctx *gin.Context, info *relaycommon.RelayInfo, usage *dto.R
 		return fmt.Errorf("invalid usage pointer")
 	}
 
-	totalUsage.TotalTokens += usage.TotalTokens
-	totalUsage.InputTokens += usage.InputTokens
-	totalUsage.OutputTokens += usage.OutputTokens
-	totalUsage.InputTokenDetails.CachedTokens += usage.InputTokenDetails.CachedTokens
-	totalUsage.InputTokenDetails.TextTokens += usage.InputTokenDetails.TextTokens
-	totalUsage.InputTokenDetails.AudioTokens += usage.InputTokenDetails.AudioTokens
-	totalUsage.OutputTokenDetails.TextTokens += usage.OutputTokenDetails.TextTokens
-	totalUsage.OutputTokenDetails.AudioTokens += usage.OutputTokenDetails.AudioTokens
+	if err := accumulateRealtimeUsage(totalUsage, usage); err != nil {
+		return err
+	}
 	// clear usage
 	err := service.PreWssConsumeQuota(ctx, info, usage)
 	return err
+}
+
+// Accumulate complete per-response usage without dropping cache modalities.
+// Reject overflow before mutating the running session totals.
+func accumulateRealtimeUsage(dst, src *dto.RealtimeUsage) error {
+	next := *dst
+	next.InputTokenDetails = dst.InputTokenDetails.Clone()
+	fields := []struct {
+		target *int
+		value  int
+	}{
+		{&next.TotalTokens, src.TotalTokens}, {&next.InputTokens, src.InputTokens}, {&next.OutputTokens, src.OutputTokens},
+		{&next.InputTokenDetails.TextTokens, src.InputTokenDetails.TextTokens}, {&next.InputTokenDetails.AudioTokens, src.InputTokenDetails.AudioTokens},
+		{&next.InputTokenDetails.ImageTokens, src.InputTokenDetails.ImageTokens}, {&next.InputTokenDetails.CachedTokens, src.InputTokenDetails.CachedTokens},
+		{&next.OutputTokenDetails.TextTokens, src.OutputTokenDetails.TextTokens}, {&next.OutputTokenDetails.AudioTokens, src.OutputTokenDetails.AudioTokens},
+		{&next.OutputTokenDetails.ImageTokens, src.OutputTokenDetails.ImageTokens},
+	}
+	if src.InputTokenDetails.CachedTokensDetails != nil {
+		if next.InputTokenDetails.CachedTokensDetails == nil {
+			next.InputTokenDetails.CachedTokensDetails = &dto.CachedTokenDetails{}
+		}
+		target, source := next.InputTokenDetails.CachedTokensDetails, src.InputTokenDetails.CachedTokensDetails
+		for _, pair := range []struct {
+			target **int
+			value  *int
+		}{{&target.TextTokens, source.TextTokens}, {&target.AudioTokens, source.AudioTokens}, {&target.ImageTokens, source.ImageTokens}} {
+			if pair.value == nil {
+				continue
+			}
+			if *pair.target == nil {
+				*pair.target = new(int)
+			}
+			fields = append(fields, struct {
+				target *int
+				value  int
+			}{*pair.target, *pair.value})
+		}
+	}
+	for _, field := range fields {
+		if field.value < 0 || *field.target < 0 || field.value > math.MaxInt32-*field.target {
+			return fmt.Errorf("realtime token usage is outside the supported range")
+		}
+		*field.target += field.value
+	}
+	*dst = next
+	return nil
 }
